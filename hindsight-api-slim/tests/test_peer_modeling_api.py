@@ -6,7 +6,7 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_peer_modeling_crud_context_and_manual_correction(api_client):
+async def test_peer_modeling_crud_context_and_manual_correction(api_client, memory):
     test_bank_id = f"peer-test-{uuid.uuid4()}"
     bank_response = await api_client.put(
         f"/v1/default/banks/{test_bank_id}",
@@ -69,3 +69,34 @@ async def test_peer_modeling_crud_context_and_manual_correction(api_client):
     assert context["target_peer_id"] == target_id
     assert context["card"]["entries"][0]["locked"] is True
     assert context["claims"][0]["sources"][0]["source_kind"] == "manual"
+
+    retain_response = await api_client.post(
+        f"/v1/default/banks/{test_bank_id}/memories",
+        json={
+            "items": [
+                {
+                    "content": "Observer says Target collects antique postcards.",
+                    "peer_context": {
+                        "observer_peer_id": observer_id,
+                        "speaker_peer_id": "observer",
+                        "subject_peer_ids": ["target"],
+                        "source_message_id": "message-1",
+                        "session_id": "session-1",
+                    },
+                }
+            ]
+        },
+    )
+    assert retain_response.status_code == 200, retain_response.text
+
+    backend = await memory._get_backend()
+    async with backend.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT role, modality, source_message_id, session_id "
+            "FROM memory_peer_roles WHERE bank_id = $1 ORDER BY role",
+            test_bank_id,
+        )
+    assert {row["role"] for row in rows} == {"observer", "speaker", "subject"}
+    assert {row["modality"] for row in rows} == {"actual"}
+    assert {row["source_message_id"] for row in rows} == {"message-1"}
+    assert {row["session_id"] for row in rows} == {"session-1"}

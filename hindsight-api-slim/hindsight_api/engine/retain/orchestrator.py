@@ -569,6 +569,13 @@ async def _insert_facts_and_links(
     # an IndexError (see issue #1037).
     result_unit_ids = _map_results_to_contents(contents, processed_facts, unit_ids if unit_ids else [])
 
+    if config.enable_peer_modeling:
+        from hindsight_api.engine.peer_modeling.attribution import persist_memory_peer_roles
+
+        peer_role_count = await persist_memory_peer_roles(conn, bank_id, contents, result_unit_ids)
+        if peer_role_count:
+            log_buffer.append(f"  Peer attribution: {peer_role_count} role links")
+
     if outbox_callback is not None:
         await outbox_callback(conn)
 
