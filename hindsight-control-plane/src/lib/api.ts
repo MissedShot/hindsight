@@ -1872,7 +1872,7 @@ export class ControlPlaneClient {
     return this.fetchApi<PeerContextResponse>(
       bankApi(
         bankId,
-        `/peers/${encodeURIComponent(observerId)}/context/${encodeURIComponent(targetId)}`
+        `/peers/${encodeURIComponent(observerId)}/context?target=${encodeURIComponent(targetId)}`
       )
     );
   }
@@ -1885,7 +1885,7 @@ export class ControlPlaneClient {
     return this.fetchApi<PeerClaimsResponse | PeerClaim[]>(
       bankApi(
         bankId,
-        `/peers/${encodeURIComponent(observerId)}/claims/${encodeURIComponent(targetId)}`
+        `/peers/${encodeURIComponent(observerId)}/claims?target=${encodeURIComponent(targetId)}`
       )
     );
   }
@@ -1894,7 +1894,7 @@ export class ControlPlaneClient {
     return this.fetchApi<PeerOperationResponse>(
       bankApi(
         bankId,
-        `/peers/${encodeURIComponent(observerId)}/model/${encodeURIComponent(targetId)}`
+        `/peers/${encodeURIComponent(observerId)}/model?target=${encodeURIComponent(targetId)}`
       ),
       { method: "POST" }
     );
@@ -1908,7 +1908,7 @@ export class ControlPlaneClient {
     return this.fetchApi<PeerOperationResponse>(
       bankApi(
         bankId,
-        `/peers/${encodeURIComponent(observerId)}/rebuild/${encodeURIComponent(targetId)}`
+        `/peers/${encodeURIComponent(observerId)}/rebuild?target=${encodeURIComponent(targetId)}`
       ),
       { method: "POST" }
     );
@@ -1931,7 +1931,7 @@ export class ControlPlaneClient {
     return this.fetchApi<PeerClaim | PeerOperationResponse>(
       bankApi(
         bankId,
-        `/peers/${encodeURIComponent(observerId)}/corrections/${encodeURIComponent(targetId)}`
+        `/peers/${encodeURIComponent(observerId)}/corrections?target=${encodeURIComponent(targetId)}`
       ),
       {
         method: "POST",

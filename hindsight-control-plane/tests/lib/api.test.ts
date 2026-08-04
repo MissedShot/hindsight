@@ -131,3 +131,49 @@ describe("ControlPlaneClient.deleteOperation", () => {
     );
   });
 });
+
+describe("ControlPlaneClient peer direction routes", () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  let client: ControlPlaneClient;
+
+  beforeEach(() => {
+    client = new ControlPlaneClient();
+    fetchSpy = vi.spyOn(globalThis, "fetch");
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        location: {
+          href: "",
+          pathname: "/en/dashboard",
+          search: "",
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    delete (globalThis as { window?: unknown }).window;
+  });
+
+  it("uses the target query expected by the Control Plane peer proxies", async () => {
+    fetchSpy.mockImplementation(async () => new Response(JSON.stringify({}), { status: 200 }));
+
+    await client.getPeerContext("bank/a", "observer/a", "target/a");
+    await client.getPeerClaims("bank/a", "observer/a", "target/a");
+    await client.modelPeer("bank/a", "observer/a", "target/a");
+    await client.rebuildPeer("bank/a", "observer/a", "target/a");
+    await client.createPeerCorrection("bank/a", "observer/a", "target/a", {
+      claim: { claim_type: "IDENTITY", text: "Known target" },
+    });
+
+    const urls = fetchSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(urls).toEqual([
+      "/api/banks/bank%2Fa/peers/observer%2Fa/context?target=target%2Fa",
+      "/api/banks/bank%2Fa/peers/observer%2Fa/claims?target=target%2Fa",
+      "/api/banks/bank%2Fa/peers/observer%2Fa/model?target=target%2Fa",
+      "/api/banks/bank%2Fa/peers/observer%2Fa/rebuild?target=target%2Fa",
+      "/api/banks/bank%2Fa/peers/observer%2Fa/corrections?target=target%2Fa",
+    ]);
+  });
+});
