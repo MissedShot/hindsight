@@ -15,6 +15,7 @@ vi.mock("@/lib/hindsight-client", () => ({
 }));
 
 import { GET, POST } from "@/app/api/banks/[bankId]/peers/route";
+import { POST as POST_BOOTSTRAP } from "@/app/api/banks/[bankId]/peers/bootstrap/route";
 
 function params(bankId: string) {
   return { params: Promise.resolve({ bankId }) };
@@ -72,6 +73,23 @@ describe("bank peer proxy routes", () => {
         headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
         body: JSON.stringify({ external_id: "self", kind: "agent", metadata: { role: "owner" } }),
       })
+    );
+  });
+
+  it("queues historical peer bootstrap", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ operation_id: "bootstrap-1", status: "pending" }), { status: 202 })
+    );
+
+    const response = await POST_BOOTSTRAP(
+      new Request("http://localhost/api/banks/bank/peers/bootstrap", { method: "POST" }),
+      params("bank")
+    );
+
+    expect(response.status).toBe(202);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://dataplane.test/v1/default/banks/bank/peers/bootstrap",
+      expect.objectContaining({ method: "POST" })
     );
   });
 });

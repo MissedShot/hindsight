@@ -1515,6 +1515,13 @@ class Hindsight:
     async def alist_peers(self, bank_id: str, *, limit: int = 100, offset: int = 0) -> dict[str, Any]:
         return await self._apeer_request("GET", bank_id, params={"limit": limit, "offset": offset})
 
+    def bootstrap_peers(self, bank_id: str) -> dict[str, Any]:
+        """Queue an idempotent historical peer-model bootstrap for a bank."""
+        return _run_async(self.abootstrap_peers(bank_id))
+
+    async def abootstrap_peers(self, bank_id: str) -> dict[str, Any]:
+        return await self._apeer_request("POST", bank_id, "/bootstrap")
+
     def get_peer(self, bank_id: str, peer_id: str) -> dict[str, Any]:
         return _run_async(self.aget_peer(bank_id, peer_id))
 

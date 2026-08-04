@@ -14,7 +14,7 @@ import {
   Sparkles,
   UsersRound,
 } from "lucide-react";
-import { client, Peer, PeerCardEntry, PeerClaim, PeerContextResponse, PeerKind } from "@/lib/api";
+import { client, OperationProgress, Peer, PeerCardEntry, PeerClaim, PeerContextResponse, PeerKind } from "@/lib/api";
 import { useBank } from "@/lib/bank-context";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -41,6 +41,14 @@ type PeerForm = {
 type OperationFeedback = {
   kind: "model" | "rebuild";
   operationId: string | null;
+};
+
+type BootstrapOperationStatus = {
+  operation_id: string;
+  status: "pending" | "processing" | "completed" | "failed" | "cancelled" | "not_found";
+  error_message: string | null;
+  progress?: OperationProgress | null;
+  result_metadata?: Record<string, unknown> | null;
 };
 
 const EMPTY_PEER_FORM: PeerForm = { id: "", kind: "person", metadata: "" };
@@ -192,6 +200,9 @@ export function PeersView({ enabled }: { enabled: boolean }) {
   const [claimsError, setClaimsError] = useState<string | null>(null);
   const [operation, setOperation] = useState<"model" | "rebuild" | null>(null);
   const [operationFeedback, setOperationFeedback] = useState<OperationFeedback | null>(null);
+  const [bootstrapStatus, setBootstrapStatus] = useState<BootstrapOperationStatus | null>(null);
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const [submittingBootstrap, setSubmittingBootstrap] = useState(false);
 
   const [peerDialogOpen, setPeerDialogOpen] = useState(false);
   const [editingPeer, setEditingPeer] = useState<Peer | null>(null);
@@ -246,6 +257,24 @@ export function PeersView({ enabled }: { enabled: boolean }) {
     }
   }, [currentBank, enabled]);
 
+  const loadBootstrapStatus = useCallback(async () => {
+    if (!currentBank || !enabled) return;
+    try {
+      const operations = await client.listOperations(currentBank, { type: "peer_bootstrap", limit: 1 });
+      const latest = operations.operations[0];
+      if (!latest) {
+        setBootstrapStatus(null);
+        setBootstrapError(null);
+        return;
+      }
+      const status = await client.getOperationStatus(currentBank, latest.id);
+      setBootstrapStatus(status);
+      setBootstrapError(null);
+    } catch (error) {
+      setBootstrapError(getErrorMessage(error));
+    }
+  }, [currentBank, enabled]);
+
   const loadDirectionalContext = useCallback(async () => {
     if (!currentBank || !enabled || !observerId || !targetId) return;
     setLoadingContext(true);
@@ -269,6 +298,21 @@ export function PeersView({ enabled }: { enabled: boolean }) {
   }, [loadPeers]);
 
   useEffect(() => {
+    void loadBootstrapStatus();
+  }, [loadBootstrapStatus]);
+
+  useEffect(() => {
+    if (bootstrapStatus?.status !== "pending" && bootstrapStatus?.status !== "processing") return;
+    const interval = window.setInterval(() => void loadBootstrapStatus(), 2000);
+    return () => window.clearInterval(interval);
+  }, [bootstrapStatus?.status, loadBootstrapStatus]);
+
+  useEffect(() => {
+    if (bootstrapStatus?.status !== "completed") return;
+    void loadPeers();
+  }, [bootstrapStatus?.status, loadPeers]);
+
+  useEffect(() => {
     void loadDirectionalContext();
   }, [loadDirectionalContext]);
 
@@ -281,7 +325,7 @@ export function PeersView({ enabled }: { enabled: boolean }) {
 
   const openEditPeer = (peer: Peer) => {
     setEditingPeer(peer);
-    setPeerForm({ id: peer.id, kind: peer.kind, metadata: formatMetadata(peer.metadata) });
+    setPeerForm({ id: peer.external_id, kind: peer.kind, metadata: formatMetadata(peer.metadata) });
     setPeerFormError(null);
     setPeerDialogOpen(true);
   };
@@ -348,6 +392,22 @@ export function PeersView({ enabled }: { enabled: boolean }) {
       // The API client displays the structured error toast.
     } finally {
       setOperation(null);
+    }
+  };
+
+  const runBootstrap = async () => {
+    if (!currentBank) return;
+    setSubmittingBootstrap(true);
+    setBootstrapError(null);
+    try {
+      const result = await client.bootstrapPeers(currentBank);
+      const status = await client.getOperationStatus(currentBank, result.operation_id);
+      setBootstrapStatus(status);
+      toast.success(result.deduplicated ? t("bootstrapAlreadyRunning") : t("bootstrapSubmitted"));
+    } catch (error) {
+      setBootstrapError(getErrorMessage(error));
+    } finally {
+      setSubmittingBootstrap(false);
     }
   };
 
@@ -453,6 +513,15 @@ export function PeersView({ enabled }: { enabled: boolean }) {
 
   if (!currentBank) return null;
 
+  const bootstrapRunning = bootstrapStatus?.status === "pending" || bootstrapStatus?.status === "processing";
+  const bootstrapProgress = bootstrapStatus?.progress;
+  const bootstrapPercent = bootstrapStatus?.status === "completed"
+    ? 100
+    : bootstrapProgress?.total && bootstrapProgress.total > 0
+      ? Math.min(100, Math.round(((bootstrapProgress.processed ?? 0) / bootstrapProgress.total) * 100))
+      : 0;
+  const bootstrapResult = asRecord(bootstrapStatus?.result_metadata?.peer_bootstrap);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -472,11 +541,69 @@ export function PeersView({ enabled }: { enabled: boolean }) {
           </div>
           <p className="mt-2 text-muted-foreground">{t("description")}</p>
         </div>
-        <Button size="sm" onClick={openCreatePeer}>
-          <Plus className="mr-2 h-4 w-4" />
-          {t("addPeer")}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" onClick={() => void runBootstrap()} disabled={bootstrapRunning || submittingBootstrap}>
+            {bootstrapRunning || submittingBootstrap ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+            {bootstrapRunning ? t("bootstrapRunning") : t("runBootstrap")}
+          </Button>
+          <Button size="sm" onClick={openCreatePeer}>
+            <Plus className="mr-2 h-4 w-4" />
+            {t("addPeer")}
+          </Button>
+        </div>
       </div>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <CardTitle className="text-lg">{t("bootstrapTitle")}</CardTitle>
+              <CardDescription>{t("bootstrapDescription")}</CardDescription>
+            </div>
+            <span className="rounded-full border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground">
+              {t(`bootstrapStatus.${bootstrapStatus?.status ?? "notStarted"}`)}
+            </span>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="h-2 overflow-hidden rounded-full bg-muted">
+            <div className="h-full bg-primary transition-[width] duration-300" style={{ width: `${bootstrapPercent}%` }} />
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>{bootstrapProgress ? t("bootstrapStage", { stage: bootstrapProgress.stage }) : t("bootstrapWaiting")}</span>
+            <span>{bootstrapPercent}%</span>
+          </div>
+          {bootstrapProgress?.detail && (
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              {["evidence_processed", "peers_discovered", "claims_materialized", "card_entries"].map((key) => (
+                <div key={key} className="rounded-lg border border-border/70 px-3 py-2">
+                  <p className="text-xs text-muted-foreground">{t(`bootstrapCounter.${key}`)}</p>
+                  <p className="mt-1 font-mono text-sm text-foreground">{bootstrapProgress.detail?.[key] ?? 0}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          {bootstrapResult && (
+            <p className="text-xs text-muted-foreground">
+              {t("bootstrapSummary", {
+                evidence: Number(bootstrapResult.evidence_processed ?? 0),
+                peers: Number(bootstrapResult.peers_discovered ?? 0),
+                claims: Number(bootstrapResult.claims_materialized ?? 0),
+                cards: Number(bootstrapResult.card_entries ?? 0),
+              })}
+            </p>
+          )}
+          {(bootstrapError || bootstrapStatus?.error_message) && (
+            <Alert variant="destructive">
+              <AlertTitle>{t("bootstrapErrorTitle")}</AlertTitle>
+              <AlertDescription>{bootstrapError ?? bootstrapStatus?.error_message}</AlertDescription>
+            </Alert>
+          )}
+          {bootstrapStatus?.operation_id && (
+            <p className="break-all font-mono text-[11px] text-muted-foreground">{bootstrapStatus.operation_id}</p>
+          )}
+        </CardContent>
+      </Card>
 
       {peerError && (
         <Alert variant="destructive">
@@ -517,7 +644,8 @@ export function PeersView({ enabled }: { enabled: boolean }) {
                 <div key={peer.id} className="rounded-lg border border-border/70 p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="truncate font-medium text-foreground" title={peer.id}>{peer.id}</p>
+                      <p className="truncate font-medium text-foreground" title={peer.external_id}>{peer.display_name || peer.external_id}</p>
+                      {peer.display_name && <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{peer.external_id}</p>}
                       <p className="mt-1 text-xs text-muted-foreground">{kindLabels[peer.kind] ?? peer.kind}</p>
                     </div>
                     <Button variant="ghost" size="sm" onClick={() => openEditPeer(peer)} aria-label={t("editPeerAria", { id: peer.id })}>
@@ -549,7 +677,7 @@ export function PeersView({ enabled }: { enabled: boolean }) {
                 <Select value={observerId} onValueChange={setObserverId}>
                   <SelectTrigger id="peer-observer"><SelectValue placeholder={t("selectPeer")} /></SelectTrigger>
                   <SelectContent>
-                    {peers.map((peer) => <SelectItem key={peer.id} value={peer.id}>{peer.id}</SelectItem>)}
+                    {peers.map((peer) => <SelectItem key={peer.id} value={peer.id}>{peer.display_name || peer.external_id}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
@@ -559,15 +687,15 @@ export function PeersView({ enabled }: { enabled: boolean }) {
                 <Select value={targetId} onValueChange={setTargetId}>
                   <SelectTrigger id="peer-target"><SelectValue placeholder={t("selectPeer")} /></SelectTrigger>
                   <SelectContent>
-                    {peers.map((peer) => <SelectItem key={peer.id} value={peer.id}>{peer.id}</SelectItem>)}
+                    {peers.map((peer) => <SelectItem key={peer.id} value={peer.id}>{peer.display_name || peer.external_id}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-sm">
-              <span className="font-medium text-foreground">{observer?.id}</span>
+              <span className="font-medium text-foreground">{observer?.display_name || observer?.external_id}</span>
               <ArrowRight className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-              <span className="font-medium text-foreground">{target?.id}</span>
+              <span className="font-medium text-foreground">{target?.display_name || target?.external_id}</span>
               {observerId === targetId && <span className="rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-xs text-primary">{t("selfPair")}</span>}
             </div>
             <div className="flex flex-wrap gap-2">

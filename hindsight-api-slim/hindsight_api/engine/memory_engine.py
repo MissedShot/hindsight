@@ -1992,7 +1992,6 @@ class MemoryEngine(MemoryEngineInterface):
             raise ValueError("bank_id, observer_peer_id, and target_peer_id are required for peer_modeling")
 
         operation_kind = PeerModelOperationKind(task_dict.get("operation_kind", PeerModelOperationKind.MODEL))
-        payload = PeerModelRequest(claims=task_dict.get("claims") or [])
         internal_context = RequestContext(
             internal=True,
             tenant_id=task_dict.get("_tenant_id"),
@@ -2000,6 +1999,26 @@ class MemoryEngine(MemoryEngineInterface):
             retry_count=task_dict.get("_retry_count", 0),
         )
         service = await self._peer_modeling_service(bank_id, internal_context)
+        auto_source_ids = [str(value) for value in task_dict.get("auto_source_ids", []) if value]
+        if auto_source_ids:
+            from .peer_modeling.bootstrap import distill_directional_claims
+
+            observer = await service.repository.get_peer(bank_id=bank_id, peer_id=observer_peer_id)
+            target = await service.repository.get_peer(bank_id=bank_id, peer_id=target_peer_id)
+            if observer is None or target is None:
+                raise ValueError("Automatic peer modeling references a missing observer or target")
+            claims = await distill_directional_claims(
+                memory_engine=self,
+                service=service,
+                bank_id=bank_id,
+                observer=observer,
+                target=target,
+                source_ids=auto_source_ids,
+                request_context=internal_context,
+            )
+            payload = PeerModelRequest(claims=claims)
+        else:
+            payload = PeerModelRequest(claims=task_dict.get("claims") or [])
         if operation_kind == PeerModelOperationKind.REBUILD:
             model = await service.rebuild(bank_id, observer_peer_id, target_peer_id, payload)
         else:
@@ -2025,6 +2044,28 @@ class MemoryEngine(MemoryEngineInterface):
                     uuid.UUID(operation_id),
                     json.dumps({"peer_model": outcome.model_dump(mode="json")}),
                 )
+
+    async def _handle_peer_bootstrap(self, task_dict: dict[str, Any]) -> dict[str, Any]:
+        """Discover peers and materialize cards from a bank's historical evidence."""
+        from hindsight_api.models import RequestContext
+
+        from .peer_modeling.bootstrap import run_peer_bootstrap
+
+        bank_id = task_dict.get("bank_id")
+        if not bank_id:
+            raise ValueError("bank_id is required for peer_bootstrap")
+        internal_context = RequestContext(
+            internal=True,
+            tenant_id=task_dict.get("_tenant_id"),
+            api_key_id=task_dict.get("_api_key_id"),
+            retry_count=task_dict.get("_retry_count", 0),
+        )
+        return await run_peer_bootstrap(
+            memory_engine=self,
+            bank_id=bank_id,
+            request_context=internal_context,
+            operation_id=task_dict.get("operation_id"),
+        )
 
     @_bind_bank_id("task_dict", key="bank_id")
     async def execute_task(self, task_dict: dict[str, Any]):
@@ -2087,6 +2128,8 @@ class MemoryEngine(MemoryEngineInterface):
                     await self._handle_refresh_mental_model(task_dict)
                 elif task_type == "peer_modeling":
                     await self._handle_peer_modeling(task_dict)
+                elif task_type == "peer_bootstrap":
+                    await self._handle_peer_bootstrap(task_dict)
                 elif task_type == "webhook_delivery":
                     await self._handle_webhook_delivery(task_dict)
                 else:
@@ -4027,12 +4070,12 @@ class MemoryEngine(MemoryEngineInterface):
         unit_ids: list[list[str]],
         request_context: "RequestContext",
     ) -> None:
-        """Queue low-confidence directional evidence after attributed retain."""
+        """Queue LLM-distilled directional evidence after attributed retain."""
         config = await self._config_resolver.resolve_full_config(bank_id, request_context)
         if not config.enable_peer_modeling or not config.enable_auto_peer_modeling:
             return
 
-        from .peer_modeling.models import PeerClaimDraft, PeerClaimType, PeerModelRequest
+        from .peer_modeling.models import PeerModelRequest
 
         service = await self._peer_modeling_service(bank_id, request_context)
         pair_sources: dict[tuple[str, str], set[str]] = {}
@@ -4087,33 +4130,14 @@ class MemoryEngine(MemoryEngineInterface):
                 if age_seconds < config.peer_model_cooldown_seconds:
                     continue
 
-            source_texts = await service.repository.get_memory_texts(bank_id=bank_id, source_ids=source_ids)
-            claims: list[PeerClaimDraft] = []
-            estimated_tokens = 0
-            for source_id in source_ids:
-                text = source_texts.get(source_id, "").strip()
-                if not text:
-                    continue
-                text_tokens = max(1, len(text) // 4)
-                if estimated_tokens + text_tokens > config.peer_model_representation_max_tokens:
-                    break
-                estimated_tokens += text_tokens
-                claims.append(
-                    PeerClaimDraft(
-                        claim_type=PeerClaimType.ATTRIBUTE,
-                        text=text,
-                        confidence=0.55,
-                        source_ids=[source_id],
-                    )
-                )
-            if claims:
-                await self.submit_async_peer_modeling(
-                    bank_id,
-                    observer_id,
-                    target_id,
-                    PeerModelRequest(claims=claims),
-                    request_context=request_context,
-                )
+            await self.submit_async_peer_modeling(
+                bank_id,
+                observer_id,
+                target_id,
+                PeerModelRequest(),
+                request_context=request_context,
+                _auto_source_ids=source_ids,
+            )
 
     async def _resolve_retain_chunking_config(
         self,
@@ -9590,10 +9614,20 @@ class MemoryEngine(MemoryEngineInterface):
     ) -> BankConfigState:
         """Create a bank if needed and persist validated configuration overrides."""
         await self._authenticate_tenant(request_context)
+        before = await self._get_bank_config_authenticated(bank_id, request_context)
+        updates = dict(updates)
         preauthorized_updates = self._consume_preauthorized_config_update(bank_id, updates, request_context)
+        if updates.get("enable_peer_modeling") is True and "enable_auto_peer_modeling" not in updates:
+            updates["enable_auto_peer_modeling"] = True
+            if preauthorized_updates is not None:
+                preauthorized_updates = dict(preauthorized_updates)
+                preauthorized_updates["enable_auto_peer_modeling"] = True
         if preauthorized_updates is not None:
             await self._config_resolver._persist_bank_config(bank_id, preauthorized_updates)
-            return await self._get_bank_config_authenticated(bank_id, request_context)
+            state = await self._get_bank_config_authenticated(bank_id, request_context)
+            if not before.config.get("enable_peer_modeling", False) and state.config.get("enable_peer_modeling", False):
+                await self.submit_async_peer_bootstrap(bank_id=bank_id, request_context=request_context)
+            return state
 
         if self._operation_validator:
             from hindsight_api.extensions import BankWriteContext, BankWriteOperation
@@ -9609,7 +9643,10 @@ class MemoryEngine(MemoryEngineInterface):
             updates,
             request_context=request_context,
         )
-        return await self._get_bank_config_authenticated(bank_id, request_context)
+        state = await self._get_bank_config_authenticated(bank_id, request_context)
+        if not before.config.get("enable_peer_modeling", False) and state.config.get("enable_peer_modeling", False):
+            await self.submit_async_peer_bootstrap(bank_id=bank_id, request_context=request_context)
+        return state
 
     async def reset_bank_config(
         self,
@@ -13840,6 +13877,7 @@ class MemoryEngine(MemoryEngineInterface):
         *,
         result_metadata: dict[str, Any] | None = None,
         dedupe_by_bank: bool = False,
+        dedupe_processing: bool = False,
     ) -> dict[str, Any]:
         """Generic helper to submit an async operation.
 
@@ -13850,6 +13888,8 @@ class MemoryEngine(MemoryEngineInterface):
             task_payload: Additional task payload fields (operation_id and bank_id are added automatically)
             result_metadata: Optional metadata to store with the operation record
             dedupe_by_bank: If True, skip creating a new task if one is already pending for this bank+operation_type
+            dedupe_processing: Also deduplicate against a currently-processing task. Use for full-bank bootstrap work;
+                consolidation deliberately leaves this false because a processing run has a fixed watermark.
 
         Returns:
             Dict with operation_id and optionally deduplicated=True if an existing task was found
@@ -13908,13 +13948,14 @@ class MemoryEngine(MemoryEngineInterface):
                     )
                     if bank_exists is None:
                         raise OperationValidationError(f"Bank '{bank_id}' not found", status_code=404)
-                    # Only check 'pending', not 'processing': a processing task uses a
-                    # watermark from when it started, so memories added after that need
-                    # a fresh run regardless.
+                    # Consolidation checks only pending tasks because a processing run
+                    # has a fixed watermark. Full-bank bootstrap operations may also
+                    # deduplicate against processing work to avoid concurrent scans.
+                    dedupe_status_sql = "IN ('pending', 'processing')" if dedupe_processing else "= 'pending'"
                     pending = await conn.fetch(
                         f"""
                         SELECT operation_id, task_payload FROM {fq_table("async_operations")}
-                        WHERE bank_id = $1 AND operation_type = $2 AND status = 'pending'
+                        WHERE bank_id = $1 AND operation_type = $2 AND status {dedupe_status_sql}
                         """,
                         bank_id,
                         operation_type,
@@ -13930,7 +13971,7 @@ class MemoryEngine(MemoryEngineInterface):
                         row_dict = json.loads(row_payload) if isinstance(row_payload, str) else (row_payload or {})
                         if row_dict.get("observation_scopes") is None:
                             logger.debug(
-                                f"{operation_type} task already pending for bank_id={bank_id}, "
+                                f"{operation_type} task already active for bank_id={bank_id}, "
                                 f"skipping duplicate (existing operation_id={row['operation_id']})"
                             )
                             return {
@@ -14623,6 +14664,7 @@ class MemoryEngine(MemoryEngineInterface):
         payload: "PeerModelRequest | None" = None,
         *,
         request_context: "RequestContext",
+        _auto_source_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """Validate and queue directional peer materialization."""
         from .peer_modeling.models import PeerModelOperationKind, PeerModelRequest
@@ -14636,6 +14678,8 @@ class MemoryEngine(MemoryEngineInterface):
             "operation_kind": PeerModelOperationKind.MODEL.value,
             "claims": [claim.model_dump(mode="json") for claim in request.claims],
         }
+        if _auto_source_ids:
+            task_payload["auto_source_ids"] = list(dict.fromkeys(_auto_source_ids))
         if request_context.tenant_id:
             task_payload["_tenant_id"] = request_context.tenant_id
         if request_context.api_key_id:
@@ -14650,6 +14694,35 @@ class MemoryEngine(MemoryEngineInterface):
                 "target_peer_id": target_peer_id,
             },
             dedupe_by_bank=False,
+        )
+
+    async def submit_async_peer_bootstrap(
+        self,
+        bank_id: str,
+        *,
+        request_context: "RequestContext",
+    ) -> dict[str, Any]:
+        """Queue an idempotent historical peer bootstrap for one bank."""
+        await self._authenticate_tenant(request_context)
+        await self._peer_modeling_service(bank_id, request_context)
+        task_payload: dict[str, Any] = {}
+        if request_context.tenant_id:
+            task_payload["_tenant_id"] = request_context.tenant_id
+        if request_context.api_key_id:
+            task_payload["_api_key_id"] = request_context.api_key_id
+        return await self._submit_async_operation(
+            bank_id=bank_id,
+            operation_type="peer_bootstrap",
+            task_type="peer_bootstrap",
+            task_payload=task_payload,
+            result_metadata={
+                "peer_bootstrap": {
+                    "status": "pending",
+                    "queued_at": datetime.now(UTC).isoformat(),
+                }
+            },
+            dedupe_by_bank=True,
+            dedupe_processing=True,
         )
 
     async def rebuild_peer_model(

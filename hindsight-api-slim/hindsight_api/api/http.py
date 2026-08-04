@@ -6231,6 +6231,27 @@ def _register_routes(app: FastAPI):
         except (PeerFeatureDisabledError, PeerConflictError, PeerValidationError) as error:
             _raise_peer_http_error(error)
 
+    @app.post(
+        "/v1/default/banks/{bank_id}/peers/bootstrap",
+        response_model=PeerOperation,
+        status_code=202,
+        operation_id="bootstrap_peers",
+        tags=["Peer Modeling"],
+    )
+    async def api_bootstrap_peers(
+        bank_id: str,
+        request_context: RequestContext = Depends(get_request_context),
+    ):
+        """Discover peers and build directional cards from existing bank evidence."""
+        try:
+            result = await app.state.memory.submit_async_peer_bootstrap(
+                bank_id,
+                request_context=request_context,
+            )
+            return PeerOperation(**result)
+        except (PeerFeatureDisabledError, PeerNotFoundError, PeerValidationError) as error:
+            _raise_peer_http_error(error)
+
     @app.get(
         "/v1/default/banks/{bank_id}/peers/{peer_id}",
         response_model=Peer,

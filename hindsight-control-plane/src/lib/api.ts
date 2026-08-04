@@ -1128,7 +1128,7 @@ export class ControlPlaneClient {
     const qs = opts?.includePayload ? "?include_payload=true" : "";
     return this.fetchApi<{
       operation_id: string;
-      status: "pending" | "completed" | "failed" | "not_found";
+      status: "pending" | "processing" | "completed" | "failed" | "cancelled" | "not_found";
       operation_type: string | null;
       created_at: string | null;
       updated_at: string | null;
@@ -1824,6 +1824,12 @@ export class ControlPlaneClient {
     );
   }
 
+  async bootstrapPeers(bankId: string): Promise<PeerOperationResponse> {
+    return this.fetchApi<PeerOperationResponse>(bankApi(bankId, "/peers/bootstrap"), {
+      method: "POST",
+    });
+  }
+
   async createPeer(
     bankId: string,
     params: {
@@ -1866,7 +1872,7 @@ export class ControlPlaneClient {
     return this.fetchApi<PeerContextResponse>(
       bankApi(
         bankId,
-        `/peers/${encodeURIComponent(observerId)}/context?target=${encodeURIComponent(targetId)}`
+        `/peers/${encodeURIComponent(observerId)}/context/${encodeURIComponent(targetId)}`
       )
     );
   }
@@ -1879,7 +1885,7 @@ export class ControlPlaneClient {
     return this.fetchApi<PeerClaimsResponse | PeerClaim[]>(
       bankApi(
         bankId,
-        `/peers/${encodeURIComponent(observerId)}/claims?target=${encodeURIComponent(targetId)}`
+        `/peers/${encodeURIComponent(observerId)}/claims/${encodeURIComponent(targetId)}`
       )
     );
   }
@@ -1888,7 +1894,7 @@ export class ControlPlaneClient {
     return this.fetchApi<PeerOperationResponse>(
       bankApi(
         bankId,
-        `/peers/${encodeURIComponent(observerId)}/model?target=${encodeURIComponent(targetId)}`
+        `/peers/${encodeURIComponent(observerId)}/model/${encodeURIComponent(targetId)}`
       ),
       { method: "POST" }
     );
@@ -1902,7 +1908,7 @@ export class ControlPlaneClient {
     return this.fetchApi<PeerOperationResponse>(
       bankApi(
         bankId,
-        `/peers/${encodeURIComponent(observerId)}/rebuild?target=${encodeURIComponent(targetId)}`
+        `/peers/${encodeURIComponent(observerId)}/rebuild/${encodeURIComponent(targetId)}`
       ),
       { method: "POST" }
     );
@@ -1925,7 +1931,7 @@ export class ControlPlaneClient {
     return this.fetchApi<PeerClaim | PeerOperationResponse>(
       bankApi(
         bankId,
-        `/peers/${encodeURIComponent(observerId)}/corrections?target=${encodeURIComponent(targetId)}`
+        `/peers/${encodeURIComponent(observerId)}/corrections/${encodeURIComponent(targetId)}`
       ),
       {
         method: "POST",
