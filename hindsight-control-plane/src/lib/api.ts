@@ -31,6 +31,81 @@ function describeErrorDetails(details: unknown): string | undefined {
   return String(details);
 }
 
+export type PeerKind = "person" | "agent" | "team" | "project" | "organization" | "other" | string;
+
+export interface Peer {
+  id: string;
+  bank_id?: string;
+  external_id?: string | null;
+  display_name?: string | null;
+  kind: PeerKind;
+  metadata?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export type PeerClaimStatus = "active" | "contested" | "superseded" | "retracted" | string;
+export type PeerClaimCategory = "IDENTITY" | "ATTRIBUTE" | "RELATIONSHIP" | "INSTRUCTION" | string;
+
+export interface PeerClaim {
+  id: string;
+  text?: string | null;
+  claim?: string | null;
+  category?: PeerClaimCategory | null;
+  type?: PeerClaimCategory | null;
+  status: PeerClaimStatus;
+  confidence?: number | null;
+  origin?: string | null;
+  locked?: boolean;
+  source_count?: number | null;
+  evidence_count?: number | null;
+  source_ids?: string[];
+  sources?: Array<Record<string, unknown>>;
+  created_at?: string | null;
+  updated_at?: string | null;
+  [key: string]: unknown;
+}
+
+export interface PeerCardEntry {
+  id?: string;
+  text?: string | null;
+  value?: string | null;
+  claim?: string | null;
+  category?: PeerClaimCategory | null;
+  type?: PeerClaimCategory | null;
+  origin?: string | null;
+  locked?: boolean;
+  source_count?: number | null;
+  evidence_count?: number | null;
+  [key: string]: unknown;
+}
+
+export interface PeerContextResponse {
+  observer_id?: string;
+  target_id?: string;
+  version?: number | string | null;
+  updated_at?: string | null;
+  card?: Record<string, unknown> | PeerCardEntry[] | null;
+  representation?: unknown;
+  claims?: PeerClaim[] | { items?: PeerClaim[]; claims?: PeerClaim[] } | null;
+  context?: Record<string, unknown> | null;
+  model?: Record<string, unknown> | null;
+  [key: string]: unknown;
+}
+
+export interface PeerClaimsResponse {
+  items?: PeerClaim[];
+  claims?: PeerClaim[];
+  total?: number;
+  [key: string]: unknown;
+}
+
+export interface PeerOperationResponse {
+  operation_id?: string | null;
+  status?: string | null;
+  [key: string]: unknown;
+}
+
 export interface WebhookHttpConfig {
   method: string;
   timeout_seconds: number;
@@ -1383,6 +1458,7 @@ export class ControlPlaneClient {
         audit_log: boolean;
         llm_trace: boolean;
         store_document_text: boolean;
+        peer_modeling?: boolean;
       };
     }>("/api/version");
   }
@@ -1732,6 +1808,127 @@ export class ControlPlaneClient {
     const query = params.toString();
     return this.fetchApi<LLMRequestStatsResponse>(
       bankApi(bankId, `/llm-requests/stats${query ? `?${query}` : ""}`)
+    );
+  }
+
+  /**
+   * List peers registered in a bank. The response accepts both the paginated
+   * `{items}` shape and the simpler `{peers}` shape used by early dataplane
+   * implementations so the UI remains compatible while the SDK is generated.
+   */
+  async listPeers(bankId: string): Promise<{ items?: Peer[]; peers?: Peer[]; total?: number } | Peer[]> {
+    return this.fetchApi<{ items?: Peer[]; peers?: Peer[]; total?: number } | Peer[]>(
+      bankApi(bankId, "/peers")
+    );
+  }
+
+  async createPeer(
+    bankId: string,
+    params: {
+      id: string;
+      display_name?: string;
+      kind: PeerKind;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<Peer> {
+    return this.fetchApi<Peer>(bankApi(bankId, "/peers"), {
+      method: "POST",
+      body: JSON.stringify(params),
+    });
+  }
+
+  async getPeer(bankId: string, peerId: string): Promise<Peer> {
+    return this.fetchApi<Peer>(bankApi(bankId, `/peers/${encodeURIComponent(peerId)}`));
+  }
+
+  async updatePeer(
+    bankId: string,
+    peerId: string,
+    params: {
+      display_name?: string;
+      kind?: PeerKind;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<Peer> {
+    return this.fetchApi<Peer>(bankApi(bankId, `/peers/${encodeURIComponent(peerId)}`), {
+      method: "PATCH",
+      body: JSON.stringify(params),
+    });
+  }
+
+  async getPeerContext(
+    bankId: string,
+    observerId: string,
+    targetId: string
+  ): Promise<PeerContextResponse> {
+    return this.fetchApi<PeerContextResponse>(
+      bankApi(
+        bankId,
+        `/peers/${encodeURIComponent(observerId)}/context?target=${encodeURIComponent(targetId)}`
+      )
+    );
+  }
+
+  async getPeerClaims(
+    bankId: string,
+    observerId: string,
+    targetId: string
+  ): Promise<PeerClaimsResponse | PeerClaim[]> {
+    return this.fetchApi<PeerClaimsResponse | PeerClaim[]>(
+      bankApi(
+        bankId,
+        `/peers/${encodeURIComponent(observerId)}/claims?target=${encodeURIComponent(targetId)}`
+      )
+    );
+  }
+
+  async modelPeer(bankId: string, observerId: string, targetId: string): Promise<PeerOperationResponse> {
+    return this.fetchApi<PeerOperationResponse>(
+      bankApi(
+        bankId,
+        `/peers/${encodeURIComponent(observerId)}/model?target=${encodeURIComponent(targetId)}`
+      ),
+      { method: "POST" }
+    );
+  }
+
+  async rebuildPeer(
+    bankId: string,
+    observerId: string,
+    targetId: string
+  ): Promise<PeerOperationResponse> {
+    return this.fetchApi<PeerOperationResponse>(
+      bankApi(
+        bankId,
+        `/peers/${encodeURIComponent(observerId)}/rebuild?target=${encodeURIComponent(targetId)}`
+      ),
+      { method: "POST" }
+    );
+  }
+
+  async createPeerCorrection(
+    bankId: string,
+    observerId: string,
+    targetId: string,
+    params: {
+      claim: {
+        claim_type: PeerClaimCategory;
+        text: string;
+        source_kind?: "manual";
+        source_ids?: string[];
+      };
+      note?: string;
+    }
+  ): Promise<PeerClaim | PeerOperationResponse> {
+    return this.fetchApi<PeerClaim | PeerOperationResponse>(
+      bankApi(
+        bankId,
+        `/peers/${encodeURIComponent(observerId)}/corrections?target=${encodeURIComponent(targetId)}`
+      ),
+      {
+        method: "POST",
+        body: JSON.stringify(params),
+      }
     );
   }
 }

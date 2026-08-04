@@ -20,6 +20,7 @@ import { MentalModelsView } from "@/components/mental-models-view";
 import { WebhooksView } from "@/components/webhooks-view";
 import { AuditLogsView } from "@/components/audit-logs-view";
 import { LLMRequestsView } from "@/components/llm-requests-view";
+import { PeersView } from "@/components/peers-view";
 import { FeatureNotEnabled } from "@/components/feature-not-enabled";
 import { useFeatures } from "@/lib/features-context";
 import { useBank } from "@/lib/bank-context";
@@ -57,7 +58,7 @@ import {
 import { LlmHealthDialog } from "@/components/llm-health-dialog";
 import { ExtractDialog } from "@/components/extract-dialog";
 
-type NavItem = "recall" | "reflect" | "data" | "documents" | "entities" | "profile";
+type NavItem = "recall" | "reflect" | "data" | "documents" | "entities" | "peers" | "profile";
 type DataSubTab = "world" | "experience" | "observations" | "mental-models";
 type BankConfigTab =
   | "general"
@@ -82,6 +83,7 @@ export default function BankPage() {
   const bankConfigEnabled = features?.bank_config_api ?? false;
   const llmTraceEnabled = features?.llm_trace ?? false;
   const llmHealthEnabled = features?.bank_llm_health ?? false;
+  const peerModelingEnabled = features?.peer_modeling ?? false;
 
   // `audit_log_enabled` and `enable_observations` are hierarchical
   // (env -> tenant -> bank): a bank can opt in even when the deployment default
@@ -668,6 +670,9 @@ export default function BankPage() {
                 <DocumentsView />
               </div>
             )}
+
+            {/* Peers Tab */}
+            {view === "peers" && <PeersView enabled={peerModelingEnabled} />}
 
             {/* Entities Tab */}
             {view === "entities" && (

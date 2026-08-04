@@ -10,6 +10,7 @@ import {
   Database,
   FileText,
   Users,
+  UsersRound,
   ChevronLeft,
   ChevronRight,
   Settings,
@@ -17,8 +18,9 @@ import {
 import { cn } from "@/lib/utils";
 import Link from "next/link";
 import { client } from "@/lib/api";
+import { useFeatures } from "@/lib/features-context";
 
-type NavItem = "recall" | "reflect" | "data" | "documents" | "entities" | "profile";
+type NavItem = "recall" | "reflect" | "data" | "documents" | "entities" | "peers" | "profile";
 
 interface SidebarProps {
   currentTab: NavItem;
@@ -29,6 +31,7 @@ export function Sidebar({ currentTab, onTabChange }: SidebarProps) {
   const t = useTranslations("bank.sidebar");
   const tBank = useTranslations("bank");
   const { currentBank } = useBank();
+  const { features } = useFeatures();
   const [isCollapsed, setIsCollapsed] = useState(true);
   const [apiVersion, setApiVersion] = useState<string | null>(null);
 
@@ -49,6 +52,7 @@ export function Sidebar({ currentTab, onTabChange }: SidebarProps) {
     { id: "reflect" as NavItem, label: t("reflect"), icon: Sparkles },
     { id: "documents" as NavItem, label: t("documents"), icon: FileText },
     { id: "entities" as NavItem, label: t("entities"), icon: Users },
+    ...(features?.peer_modeling ? [{ id: "peers" as NavItem, label: t("peers"), icon: UsersRound }] : []),
     { id: "profile" as NavItem, label: tBank("bankConfiguration"), icon: Settings },
   ];
 
