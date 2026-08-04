@@ -111,6 +111,10 @@ type DocStorageEdits = {
   store_document_text: boolean | null;
 };
 
+type PeerModelingEdits = {
+  enable_peer_modeling: boolean;
+};
+
 // ─── Gemini safety settings catalogue ────────────────────────────────────────
 
 const GEMINI_HARM_CATEGORY_VALUES = [
@@ -299,6 +303,12 @@ function docStorageSlice(overrides: Record<string, any>): DocStorageEdits {
   };
 }
 
+function peerModelingSlice(config: Record<string, any>): PeerModelingEdits {
+  return {
+    enable_peer_modeling: config.enable_peer_modeling === true,
+  };
+}
+
 const DEFAULT_PROFILE: ProfileData = {
   reflect_mission: "",
   disposition_skepticism: 3,
@@ -308,8 +318,13 @@ const DEFAULT_PROFILE: ProfileData = {
 
 // ─── BankConfigView ───────────────────────────────────────────────────────────
 
-export function BankConfigView() {
+export function BankConfigView({
+  onPeerModelingChange,
+}: {
+  onPeerModelingChange?: (enabled: boolean) => void;
+}) {
   const t = useTranslations("bankConfig");
+  const tPeers = useTranslations("peersView");
   const { currentBank: bankId } = useBank();
   const { features } = useFeatures();
   const bankConfigEnabled = features?.bank_config_api ?? true; // optimistic default while loading
@@ -333,6 +348,9 @@ export function BankConfigView() {
   const [geminiEdits, setGeminiEdits] = useState<GeminiEdits>(geminiSlice({}));
   const [auditEdits, setAuditEdits] = useState<AuditEdits>(auditSlice({}));
   const [docStorageEdits, setDocStorageEdits] = useState<DocStorageEdits>(docStorageSlice({}));
+  const [peerModelingEdits, setPeerModelingEdits] = useState<PeerModelingEdits>(
+    peerModelingSlice({})
+  );
 
   // Per-section saving/error state
   const [retainSaving, setRetainSaving] = useState(false);
@@ -341,12 +359,14 @@ export function BankConfigView() {
   const [mcpSaving, setMcpSaving] = useState(false);
   const [geminiSaving, setGeminiSaving] = useState(false);
   const [securityPrivacySaving, setSecurityPrivacySaving] = useState(false);
+  const [peerModelingSaving, setPeerModelingSaving] = useState(false);
   const [retainError, setRetainError] = useState<string | null>(null);
   const [observationsError, setObservationsError] = useState<string | null>(null);
   const [reflectError, setReflectError] = useState<string | null>(null);
   const [mcpError, setMcpError] = useState<string | null>(null);
   const [geminiError, setGeminiError] = useState<string | null>(null);
   const [securityPrivacyError, setSecurityPrivacyError] = useState<string | null>(null);
+  const [peerModelingError, setPeerModelingError] = useState<string | null>(null);
 
   // Dirty tracking
   const retainDirty = useMemo(
@@ -381,6 +401,11 @@ export function BankConfigView() {
     () => JSON.stringify(docStorageEdits) !== JSON.stringify(docStorageSlice(baseOverrides)),
     [docStorageEdits, baseOverrides]
   );
+  const peerModelingDirty = useMemo(
+    () =>
+      JSON.stringify(peerModelingEdits) !== JSON.stringify(peerModelingSlice(baseConfig)),
+    [peerModelingEdits, baseConfig]
+  );
   useEffect(() => {
     if (bankId) loadAll();
   }, [bankId]);
@@ -414,6 +439,7 @@ export function BankConfigView() {
       setGeminiEdits(geminiSlice(cfg));
       setAuditEdits(auditSlice(overrides));
       setDocStorageEdits(docStorageSlice(overrides));
+      setPeerModelingEdits(peerModelingSlice(cfg));
     } catch (err) {
       console.error("Failed to load bank data:", err);
     } finally {
@@ -525,6 +551,23 @@ export function BankConfigView() {
       setSecurityPrivacyError(err.message || t("securityPrivacyFailedToSave"));
     } finally {
       setSecurityPrivacySaving(false);
+    }
+  };
+
+  const savePeerModeling = async () => {
+    if (!bankId) return;
+    setPeerModelingSaving(true);
+    setPeerModelingError(null);
+    try {
+      const response = await client.updateBankConfig(bankId, peerModelingEdits);
+      const enabled = response.config?.enable_peer_modeling === true;
+      setBaseConfig((prev) => ({ ...prev, ...response.config, enable_peer_modeling: enabled }));
+      setPeerModelingEdits({ enable_peer_modeling: enabled });
+      onPeerModelingChange?.(enabled);
+    } catch (err: any) {
+      setPeerModelingError(err.message || t("observationsFailedToSave"));
+    } finally {
+      setPeerModelingSaving(false);
     }
   };
 
@@ -777,6 +820,30 @@ export function BankConfigView() {
             value={reflectEdits.disposition_empathy}
             onChange={(v) => setReflectEdits((prev) => ({ ...prev, disposition_empathy: v }))}
           />
+        </ConfigSection>
+
+        {/* Peer Modeling Section */}
+        <ConfigSection
+          title={tPeers("title")}
+          description={tPeers("description")}
+          error={peerModelingError}
+          dirty={peerModelingDirty}
+          saving={peerModelingSaving}
+          onSave={savePeerModeling}
+        >
+          <FieldRow label={tPeers("title")} description={tPeers("disabledDescription")}>
+            <div className="flex items-center gap-2 justify-end">
+              <Switch
+                checked={peerModelingEdits.enable_peer_modeling}
+                onCheckedChange={(enabled) =>
+                  setPeerModelingEdits({ enable_peer_modeling: enabled })
+                }
+              />
+              <Label className="text-xs text-muted-foreground">
+                {peerModelingEdits.enable_peer_modeling ? t("enabled") : t("disabled")}
+              </Label>
+            </div>
+          </FieldRow>
         </ConfigSection>
 
         {/* MCP Tools Section */}
