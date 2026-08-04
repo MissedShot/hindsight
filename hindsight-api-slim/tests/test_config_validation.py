@@ -150,6 +150,32 @@ def test_fail_on_extraction_errors_reads_true_from_env(monkeypatch):
     assert config.fail_on_extraction_errors is True
 
 
+def test_peer_modeling_defaults_are_opt_in(monkeypatch):
+    """Peer modeling and its automatic scheduler remain disabled until enabled explicitly."""
+    from hindsight_api.config import ENV_ENABLE_AUTO_PEER_MODELING, ENV_ENABLE_PEER_MODELING, HindsightConfig
+
+    monkeypatch.delenv(ENV_ENABLE_PEER_MODELING, raising=False)
+    monkeypatch.delenv(ENV_ENABLE_AUTO_PEER_MODELING, raising=False)
+    monkeypatch.setenv("HINDSIGHT_API_LLM_PROVIDER", "mock")
+
+    config = HindsightConfig.from_env()
+
+    assert config.enable_peer_modeling is False
+    assert config.enable_auto_peer_modeling is False
+    assert config.peer_model_max_card_entries == 40
+
+
+def test_peer_modeling_limits_are_validated(monkeypatch):
+    """Invalid card limits fail during configuration loading rather than inside a worker."""
+    from hindsight_api.config import ENV_PEER_MODEL_MAX_CARD_ENTRIES, HindsightConfig
+
+    monkeypatch.setenv(ENV_PEER_MODEL_MAX_CARD_ENTRIES, "0")
+    monkeypatch.setenv("HINDSIGHT_API_LLM_PROVIDER", "mock")
+
+    with pytest.raises(ValueError, match=ENV_PEER_MODEL_MAX_CARD_ENTRIES):
+        HindsightConfig.from_env()
+
+
 def test_llm_ollama_num_ctx_defaults_to_none(monkeypatch):
     """Unset Ollama num_ctx override lets Ollama use its model/server default."""
     from hindsight_api.config import ENV_LLM_OLLAMA_NUM_CTX, HindsightConfig

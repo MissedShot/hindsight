@@ -1583,6 +1583,20 @@ export HINDSIGHT_API_OBSERVATIONS_MISSION="Observations are durable facts about 
 export HINDSIGHT_API_OBSERVATIONS_MISSION="Observations are recurring patterns in customer support interactions: common failure modes, frequently requested features, and pain points that appear across multiple tickets."
 ```
 
+### Peer Modeling (Experimental) {#peer-modeling}
+
+Peer modeling materializes a directional `observer → target` view from bank-scoped evidence. It keeps a compact peer card separate from a richer relationship representation and is disabled by default while the API is experimental. All settings below are configurable per bank.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `HINDSIGHT_API_ENABLE_PEER_MODELING` | Enable peer registry, directional model reads, and manual modeling operations. | `false` |
+| `HINDSIGHT_API_ENABLE_AUTO_PEER_MODELING` | Automatically schedule peer modeling when enough new attributed facts exist. The master peer-modeling flag must also be enabled. | `false` |
+| `HINDSIGHT_API_PEER_MODEL_MIN_NEW_FACTS` | Minimum new attributed facts before automatic modeling may run for an observer/target pair. | `8` |
+| `HINDSIGHT_API_PEER_MODEL_COOLDOWN_SECONDS` | Minimum time between automatic runs for the same directional pair. `0` disables the cooldown. | `300` |
+| `HINDSIGHT_API_PEER_MODEL_MAX_CARD_ENTRIES` | Maximum active stable entries in a materialized peer card. | `40` |
+| `HINDSIGHT_API_PEER_MODEL_MIN_PATTERN_SOURCES` | Minimum independent evidence sources required for a behavioral pattern. | `2` |
+| `HINDSIGHT_API_PEER_MODEL_REPRESENTATION_MAX_TOKENS` | Maximum output budget for the richer relationship representation. | `1200` |
+
 ### Reflect
 
 | Variable | Description | Default |

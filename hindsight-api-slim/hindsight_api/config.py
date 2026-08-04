@@ -633,6 +633,15 @@ ENV_OBSERVATION_HISTORY_MAX_ENTRIES = "HINDSIGHT_API_OBSERVATION_HISTORY_MAX_ENT
 ENV_ENABLE_MENTAL_MODEL_HISTORY = "HINDSIGHT_API_ENABLE_MENTAL_MODEL_HISTORY"
 ENV_MENTAL_MODEL_HISTORY_MAX_ENTRIES = "HINDSIGHT_API_MENTAL_MODEL_HISTORY_MAX_ENTRIES"
 
+# Peer modeling settings (directional peer cards and representations)
+ENV_ENABLE_PEER_MODELING = "HINDSIGHT_API_ENABLE_PEER_MODELING"
+ENV_ENABLE_AUTO_PEER_MODELING = "HINDSIGHT_API_ENABLE_AUTO_PEER_MODELING"
+ENV_PEER_MODEL_MIN_NEW_FACTS = "HINDSIGHT_API_PEER_MODEL_MIN_NEW_FACTS"
+ENV_PEER_MODEL_COOLDOWN_SECONDS = "HINDSIGHT_API_PEER_MODEL_COOLDOWN_SECONDS"
+ENV_PEER_MODEL_MAX_CARD_ENTRIES = "HINDSIGHT_API_PEER_MODEL_MAX_CARD_ENTRIES"
+ENV_PEER_MODEL_MIN_PATTERN_SOURCES = "HINDSIGHT_API_PEER_MODEL_MIN_PATTERN_SOURCES"
+ENV_PEER_MODEL_REPRESENTATION_MAX_TOKENS = "HINDSIGHT_API_PEER_MODEL_REPRESENTATION_MAX_TOKENS"
+
 # Webhook configuration (global, static - server-level only)
 ENV_WEBHOOK_URL = "HINDSIGHT_API_WEBHOOK_URL"
 ENV_WEBHOOK_SECRET = "HINDSIGHT_API_WEBHOOK_SECRET"
@@ -690,6 +699,7 @@ ENV_OPERATION_CLEANUP_BATCH_SIZE = "HINDSIGHT_API_OPERATION_CLEANUP_BATCH_SIZE"
 # names are derived from it (see _parse_worker_slot_reservations).
 WORKER_SLOT_TYPE_DEFAULTS: dict[str, int] = {
     "consolidation": 2,
+    "peer_modeling": 0,
     "retain": 0,
     "file_convert_retain": 0,
     "refresh_mental_model": 0,
@@ -1145,6 +1155,16 @@ DEFAULT_MENTAL_MODEL_HISTORY_MAX_ENTRIES = 50
 DEFAULT_OBSERVATION_HISTORY_MAX_ENTRIES = 50
 DEFAULT_CONSOLIDATION_MAX_ATTEMPTS = 3  # Outer retry attempts for consolidation LLM batch calls
 DEFAULT_CONSOLIDATION_BATCH_SIZE = 50  # Memories to load per batch (internal memory optimization)
+
+# Peer modeling is opt-in while the feature is experimental. Auto scheduling has
+# its own switch so operators can expose manual model/rebuild operations first.
+DEFAULT_ENABLE_PEER_MODELING = False
+DEFAULT_ENABLE_AUTO_PEER_MODELING = False
+DEFAULT_PEER_MODEL_MIN_NEW_FACTS = 8
+DEFAULT_PEER_MODEL_COOLDOWN_SECONDS = 300
+DEFAULT_PEER_MODEL_MAX_CARD_ENTRIES = 40
+DEFAULT_PEER_MODEL_MIN_PATTERN_SOURCES = 2
+DEFAULT_PEER_MODEL_REPRESENTATION_MAX_TOKENS = 1200
 DEFAULT_CONSOLIDATION_MAX_MEMORIES_PER_ROUND = (
     100  # Max memories per consolidation round (0 = unlimited). Limits how long one bank holds a worker slot.
 )
@@ -2234,6 +2254,16 @@ class HindsightConfig:
     file_parser_markitdown_ocr_model: str | None = None
     file_parser_markitdown_ocr_prompt: str = DEFAULT_FILE_PARSER_MARKITDOWN_OCR_PROMPT
 
+    # Peer modeling settings (directional observer -> target models). These are
+    # defaulted additions so existing direct HindsightConfig constructors remain valid.
+    enable_peer_modeling: bool = DEFAULT_ENABLE_PEER_MODELING
+    enable_auto_peer_modeling: bool = DEFAULT_ENABLE_AUTO_PEER_MODELING
+    peer_model_min_new_facts: int = DEFAULT_PEER_MODEL_MIN_NEW_FACTS
+    peer_model_cooldown_seconds: int = DEFAULT_PEER_MODEL_COOLDOWN_SECONDS
+    peer_model_max_card_entries: int = DEFAULT_PEER_MODEL_MAX_CARD_ENTRIES
+    peer_model_min_pattern_sources: int = DEFAULT_PEER_MODEL_MIN_PATTERN_SOURCES
+    peer_model_representation_max_tokens: int = DEFAULT_PEER_MODEL_REPRESENTATION_MAX_TOKENS
+
     # Multi-LLM chains (static, server-level). Index 0 of each chain is the
     # corresponding unindexed/base LLM config above; these hold the extra indexed
     # members and the routing strategy. Per-op members fall back to the global
@@ -2335,6 +2365,14 @@ class HindsightConfig:
         "observations_mission",
         "max_observations_per_scope",
         "observation_scope_limits",
+        # Directional peer-card and representation materialization
+        "enable_peer_modeling",
+        "enable_auto_peer_modeling",
+        "peer_model_min_new_facts",
+        "peer_model_cooldown_seconds",
+        "peer_model_max_card_entries",
+        "peer_model_min_pattern_sources",
+        "peer_model_representation_max_tokens",
         # Reflect settings
         "reflect_mission",
         "reflect_source_facts_max_tokens",
@@ -2557,6 +2595,20 @@ class HindsightConfig:
         if self.operation_cleanup_batch_size < 1:
             raise ValueError(
                 f"{ENV_OPERATION_CLEANUP_BATCH_SIZE} must be >= 1, got {self.operation_cleanup_batch_size}"
+            )
+
+        peer_positive_fields = (
+            (ENV_PEER_MODEL_MIN_NEW_FACTS, self.peer_model_min_new_facts),
+            (ENV_PEER_MODEL_MAX_CARD_ENTRIES, self.peer_model_max_card_entries),
+            (ENV_PEER_MODEL_MIN_PATTERN_SOURCES, self.peer_model_min_pattern_sources),
+            (ENV_PEER_MODEL_REPRESENTATION_MAX_TOKENS, self.peer_model_representation_max_tokens),
+        )
+        for env_name, value in peer_positive_fields:
+            if value < 1:
+                raise ValueError(f"{env_name} must be >= 1, got {value}")
+        if self.peer_model_cooldown_seconds < 0:
+            raise ValueError(
+                f"{ENV_PEER_MODEL_COOLDOWN_SECONDS} must be >= 0, got {self.peer_model_cooldown_seconds}"
             )
 
     @classmethod
@@ -3230,6 +3282,32 @@ class HindsightConfig:
             ),
             observation_scope_limits=json.loads(os.getenv(ENV_OBSERVATION_SCOPE_LIMITS, "null"))
             or DEFAULT_OBSERVATION_SCOPE_LIMITS,
+            enable_peer_modeling=os.getenv(
+                ENV_ENABLE_PEER_MODELING, str(DEFAULT_ENABLE_PEER_MODELING)
+            ).lower()
+            == "true",
+            enable_auto_peer_modeling=os.getenv(
+                ENV_ENABLE_AUTO_PEER_MODELING, str(DEFAULT_ENABLE_AUTO_PEER_MODELING)
+            ).lower()
+            == "true",
+            peer_model_min_new_facts=int(
+                os.getenv(ENV_PEER_MODEL_MIN_NEW_FACTS, str(DEFAULT_PEER_MODEL_MIN_NEW_FACTS))
+            ),
+            peer_model_cooldown_seconds=int(
+                os.getenv(ENV_PEER_MODEL_COOLDOWN_SECONDS, str(DEFAULT_PEER_MODEL_COOLDOWN_SECONDS))
+            ),
+            peer_model_max_card_entries=int(
+                os.getenv(ENV_PEER_MODEL_MAX_CARD_ENTRIES, str(DEFAULT_PEER_MODEL_MAX_CARD_ENTRIES))
+            ),
+            peer_model_min_pattern_sources=int(
+                os.getenv(ENV_PEER_MODEL_MIN_PATTERN_SOURCES, str(DEFAULT_PEER_MODEL_MIN_PATTERN_SOURCES))
+            ),
+            peer_model_representation_max_tokens=int(
+                os.getenv(
+                    ENV_PEER_MODEL_REPRESENTATION_MAX_TOKENS,
+                    str(DEFAULT_PEER_MODEL_REPRESENTATION_MAX_TOKENS),
+                )
+            ),
             entity_labels=None,
             entities_allow_free_form=True,
             memory_defense=None,
