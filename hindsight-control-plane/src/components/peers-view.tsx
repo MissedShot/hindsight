@@ -14,7 +14,16 @@ import {
   Sparkles,
   UsersRound,
 } from "lucide-react";
-import { client, OperationProgress, Peer, PeerCardEntry, PeerClaim, PeerContextResponse, PeerKind } from "@/lib/api";
+import {
+  client,
+  OperationProgress,
+  Peer,
+  PeerCardEntry,
+  PeerClaim,
+  PeerContextResponse,
+  PeerCorrectionPlan,
+  PeerKind,
+} from "@/lib/api";
 import { useBank } from "@/lib/bank-context";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -212,7 +221,7 @@ export function PeersView({ enabled }: { enabled: boolean }) {
 
   const [correctionDialogOpen, setCorrectionDialogOpen] = useState(false);
   const [correctionText, setCorrectionText] = useState("");
-  const [correctionCategory, setCorrectionCategory] = useState<CardCategory>("ATTRIBUTE");
+  const [correctionPlan, setCorrectionPlan] = useState<PeerCorrectionPlan | null>(null);
   const [correctionError, setCorrectionError] = useState<string | null>(null);
   const [savingCorrection, setSavingCorrection] = useState(false);
 
@@ -413,12 +422,12 @@ export function PeersView({ enabled }: { enabled: boolean }) {
 
   const openCorrection = () => {
     setCorrectionText("");
-    setCorrectionCategory("ATTRIBUTE");
+    setCorrectionPlan(null);
     setCorrectionError(null);
     setCorrectionDialogOpen(true);
   };
 
-  const submitCorrection = async () => {
+  const reviewCorrection = async () => {
     if (!currentBank || !observerId || !targetId || !correctionText.trim()) {
       setCorrectionError(t("correctionRequired"));
       return;
@@ -426,12 +435,27 @@ export function PeersView({ enabled }: { enabled: boolean }) {
     setSavingCorrection(true);
     setCorrectionError(null);
     try {
+      const plan = await client.planPeerCorrection(
+        currentBank,
+        observerId,
+        targetId,
+        correctionText.trim()
+      );
+      setCorrectionPlan(plan);
+    } catch (error) {
+      setCorrectionError(getErrorMessage(error));
+    } finally {
+      setSavingCorrection(false);
+    }
+  };
+
+  const submitCorrection = async () => {
+    if (!currentBank || !observerId || !targetId || !correctionPlan) return;
+    setSavingCorrection(true);
+    setCorrectionError(null);
+    try {
       await client.createPeerCorrection(currentBank, observerId, targetId, {
-        claim: {
-          claim_type: correctionCategory,
-          text: correctionText.trim(),
-          source_kind: "manual",
-        },
+        plan: correctionPlan,
       });
       toast.success(t("correctionSubmitted"));
       setCorrectionDialogOpen(false);
@@ -852,22 +876,73 @@ export function PeersView({ enabled }: { enabled: boolean }) {
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="correction-category">{t("categoryLabel")}</Label>
-              <Select value={correctionCategory} onValueChange={(category) => setCorrectionCategory(category as CardCategory)}>
-                <SelectTrigger id="correction-category"><SelectValue /></SelectTrigger>
-                <SelectContent>{CARD_CATEGORIES.map((category) => <SelectItem key={category} value={category}>{categoryLabels[category]}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
               <Label htmlFor="correction-text">{t("correctionTextLabel")}</Label>
-              <Textarea id="correction-text" value={correctionText} onChange={(event) => setCorrectionText(event.target.value)} placeholder={t("correctionTextPlaceholder")} rows={6} />
+              <Textarea
+                id="correction-text"
+                value={correctionText}
+                onChange={(event) => {
+                  setCorrectionText(event.target.value);
+                  setCorrectionPlan(null);
+                }}
+                placeholder={t("correctionTextPlaceholder")}
+                rows={6}
+              />
             </div>
-            <Alert><AlertDescription>{t("correctionLockedNotice")}</AlertDescription></Alert>
+            {correctionPlan ? (
+              <div className="space-y-4 rounded-lg border bg-muted/30 p-4">
+                <div className="space-y-2">
+                  <Label>{t("correctionPlanAdds")}</Label>
+                  <div className="space-y-2">
+                    {correctionPlan.claims.map((claim, index) => (
+                      <div key={`${claim.claim_type}-${index}`} className="rounded-md border bg-background p-3 text-sm">
+                        <div className="mb-1 text-xs font-medium text-muted-foreground">
+                          {categoryLabels[claim.claim_type as CardCategory] ?? claim.claim_type}
+                        </div>
+                        {claim.text}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>{t("correctionPlanReplaces")}</Label>
+                  {correctionPlan.supersede_claim_ids.length > 0 ? (
+                    <div className="space-y-2">
+                      {correctionPlan.supersede_claim_ids.map((claimId) => {
+                        const claim = claims.find((candidate) => candidate.id === claimId);
+                        return (
+                          <div key={claimId} className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
+                            {claim ? getEntryText(claim as unknown as Record<string, unknown>) : claimId}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">{t("correctionPlanNoReplacements")}</p>
+                  )}
+                </div>
+                <Alert><AlertDescription>{correctionPlan.reason}</AlertDescription></Alert>
+              </div>
+            ) : (
+              <Alert><AlertDescription>{t("correctionLockedNotice")}</AlertDescription></Alert>
+            )}
             {correctionError && <Alert variant="destructive"><AlertDescription>{correctionError}</AlertDescription></Alert>}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCorrectionDialogOpen(false)} disabled={savingCorrection}>{t("cancel")}</Button>
-            <Button onClick={() => void submitCorrection()} disabled={savingCorrection || !correctionText.trim()}>{savingCorrection && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t("submitCorrection")}</Button>
+            {correctionPlan ? (
+              <>
+                <Button variant="outline" onClick={() => setCorrectionPlan(null)} disabled={savingCorrection}>{t("editCorrection")}</Button>
+                <Button onClick={() => void submitCorrection()} disabled={savingCorrection}>
+                  {savingCorrection && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  {t("applyCorrection")}
+                </Button>
+              </>
+            ) : (
+              <Button onClick={() => void reviewCorrection()} disabled={savingCorrection || !correctionText.trim()}>
+                {savingCorrection && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {t("reviewCorrection")}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

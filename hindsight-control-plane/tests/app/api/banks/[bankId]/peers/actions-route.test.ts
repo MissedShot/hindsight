@@ -16,6 +16,7 @@ vi.mock("@/lib/hindsight-client", () => ({
 import { GET as getPeer, PATCH as patchPeer } from "@/app/api/banks/[bankId]/peers/[peerId]/route";
 import { GET as getClaims } from "@/app/api/banks/[bankId]/peers/[peerId]/claims/route";
 import { POST as postCorrection } from "@/app/api/banks/[bankId]/peers/[peerId]/corrections/route";
+import { POST as postCorrectionPlan } from "@/app/api/banks/[bankId]/peers/[peerId]/corrections/plan/route";
 import { POST as postModel } from "@/app/api/banks/[bankId]/peers/[peerId]/model/route";
 import { POST as postRebuild } from "@/app/api/banks/[bankId]/peers/[peerId]/rebuild/route";
 
@@ -90,26 +91,44 @@ describe("peer detail and action proxy routes", () => {
     );
   });
 
-  it("forwards a manual correction body and target query", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ id: "claim-1", status: "active" }), { status: 201 })
+  it("forwards semantic correction planning and exact-plan application", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({ ok: true }), { status: 200 })
     );
-    const body = {
-      claim: { claim_type: "ATTRIBUTE", text: "Prefers concise answers", source_kind: "manual" },
+    const planBody = { text: "I was born on March 14, 1991." };
+    const plan = {
+      correction_text: planBody.text,
+      base_model_version: 2,
+      claims: [{ claim_type: "IDENTITY", text: "Born on March 14, 1991.", confidence: 1 }],
+      supersede_claim_ids: ["claim-old"],
+      reason: "Replaces the incomplete birthday claim.",
     };
 
-    const response = await postCorrection(
+    await postCorrectionPlan(
       new Request("http://localhost/api/peers?target=target%2F2", {
         method: "POST",
-        body: JSON.stringify(body),
+        body: JSON.stringify(planBody),
+      }),
+      routeParams
+    );
+    const applyBody = { plan };
+    await postCorrection(
+      new Request("http://localhost/api/peers?target=target%2F2", {
+        method: "POST",
+        body: JSON.stringify(applyBody),
       }),
       routeParams
     );
 
-    expect(response.status).toBe(201);
-    expect(fetchSpy).toHaveBeenCalledWith(
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      1,
+      "https://dataplane.test/v1/default/banks/bank%3A%2F%25/peers/observer%2F1/corrections/target%2F2/plan",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(planBody) })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      2,
       "https://dataplane.test/v1/default/banks/bank%3A%2F%25/peers/observer%2F1/corrections/target%2F2",
-      expect.objectContaining({ method: "POST", body: JSON.stringify(body) })
+      expect.objectContaining({ method: "POST", body: JSON.stringify(applyBody) })
     );
   });
 });

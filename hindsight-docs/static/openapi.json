@@ -4645,6 +4645,92 @@
         }
       }
     },
+    "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/corrections/{target_peer_id}/plan": {
+      "post": {
+        "tags": [
+          "Peer Modeling"
+        ],
+        "summary": "Api Plan Peer Correction",
+        "operationId": "plan_peer_correction",
+        "parameters": [
+          {
+            "name": "bank_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Id"
+            }
+          },
+          {
+            "name": "observer_peer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Observer Peer Id"
+            }
+          },
+          {
+            "name": "target_peer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Target Peer Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PeerCorrectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerCorrectionPlan-Output"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/corrections/{target_peer_id}": {
       "post": {
         "tags": [
@@ -4702,7 +4788,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/PeerCorrectionRequest"
+                "$ref": "#/components/schemas/PeerCorrectionApplyRequest"
               }
             }
           }
@@ -12264,10 +12350,10 @@
         "title": "PeerContext",
         "description": "Typed context projection used by callers before a future retain seam exists."
       },
-      "PeerCorrectionRequest": {
+      "PeerCorrectionApplyRequest": {
         "properties": {
-          "claim": {
-            "$ref": "#/components/schemas/PeerClaimDraft"
+          "plan": {
+            "$ref": "#/components/schemas/PeerCorrectionPlan-Input"
           },
           "note": {
             "anyOf": [
@@ -12285,15 +12371,165 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "claim"
+          "plan"
+        ],
+        "title": "PeerCorrectionApplyRequest",
+        "description": "Explicit request to apply a previously reviewed semantic correction plan."
+      },
+      "PeerCorrectionClaimDraft": {
+        "properties": {
+          "claim_type": {
+            "$ref": "#/components/schemas/PeerClaimType"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Text"
+          },
+          "confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "default": 1.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "claim_type",
+          "text"
+        ],
+        "title": "PeerCorrectionClaimDraft",
+        "description": "One stable claim proposed by the semantic correction planner."
+      },
+      "PeerCorrectionPlan-Input": {
+        "properties": {
+          "claims": {
+            "items": {
+              "$ref": "#/components/schemas/PeerCorrectionClaimDraft"
+            },
+            "type": "array",
+            "maxItems": 16,
+            "minItems": 1,
+            "title": "Claims"
+          },
+          "supersede_claim_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Supersede Claim Ids"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Reason"
+          },
+          "correction_text": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Correction Text"
+          },
+          "base_model_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Base Model Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reason",
+          "correction_text",
+          "base_model_version"
+        ],
+        "title": "PeerCorrectionPlan",
+        "description": "Version-bound correction plan shown to the caller before any mutation."
+      },
+      "PeerCorrectionPlan-Output": {
+        "properties": {
+          "claims": {
+            "items": {
+              "$ref": "#/components/schemas/PeerCorrectionClaimDraft"
+            },
+            "type": "array",
+            "maxItems": 16,
+            "minItems": 1,
+            "title": "Claims"
+          },
+          "supersede_claim_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Supersede Claim Ids"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Reason"
+          },
+          "correction_text": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Correction Text"
+          },
+          "base_model_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Base Model Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reason",
+          "correction_text",
+          "base_model_version"
+        ],
+        "title": "PeerCorrectionPlan",
+        "description": "Version-bound correction plan shown to the caller before any mutation."
+      },
+      "PeerCorrectionRequest": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text"
         ],
         "title": "PeerCorrectionRequest",
-        "description": "Manual correction request; the engine always stores it locked and manual."
+        "description": "Natural-language correction to interpret against the current directional model."
       },
       "PeerCorrectionResult": {
         "properties": {
-          "claim": {
-            "$ref": "#/components/schemas/PeerClaim"
+          "claims": {
+            "items": {
+              "$ref": "#/components/schemas/PeerClaim"
+            },
+            "type": "array",
+            "title": "Claims"
+          },
+          "superseded_claim_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Superseded Claim Ids"
           },
           "model": {
             "$ref": "#/components/schemas/PeerModel"
@@ -12302,11 +12538,10 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "claim",
           "model"
         ],
         "title": "PeerCorrectionResult",
-        "description": "Atomic correction result containing the correction and its rematerialized model."
+        "description": "Atomic targeted correction result and its rematerialized directional model."
       },
       "PeerCreate": {
         "properties": {

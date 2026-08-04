@@ -133,6 +133,18 @@ export interface PeerClaimDraft {
   source_ids?: string[];
 }
 
+export interface PeerCorrectionPlan {
+  correction_text: string;
+  base_model_version: number;
+  claims: Array<{
+    claim_type: PeerClaimType;
+    text: string;
+    confidence: number;
+  }>;
+  supersede_claim_ids: string[];
+  reason: string;
+}
+
 export interface Peer {
   id: string;
   bank_id: string;
@@ -676,16 +688,34 @@ export class HindsightClient {
     );
   }
 
+  async planPeerCorrection(
+    bankId: string,
+    observerPeerId: string,
+    targetPeerId: string,
+    text: string,
+    options?: { signal?: AbortSignal }
+  ): Promise<PeerCorrectionPlan> {
+    const response = await this.client.post({
+      url: `/v1/default/banks/${encodeURIComponent(bankId)}/peers/${encodeURIComponent(observerPeerId)}/corrections/${encodeURIComponent(targetPeerId)}/plan`,
+      body: { text },
+      signal: options?.signal,
+    });
+    return this.validateResponse(
+      response as { data?: PeerCorrectionPlan; error?: unknown; response?: Response },
+      "planPeerCorrection"
+    );
+  }
+
   async correctPeerModel(
     bankId: string,
     observerPeerId: string,
     targetPeerId: string,
-    claim: PeerClaimDraft,
+    plan: PeerCorrectionPlan,
     options?: { note?: string; signal?: AbortSignal }
   ): Promise<Record<string, unknown>> {
     const response = await this.client.post({
       url: `/v1/default/banks/${encodeURIComponent(bankId)}/peers/${encodeURIComponent(observerPeerId)}/corrections/${encodeURIComponent(targetPeerId)}`,
-      body: { claim, note: options?.note },
+      body: { plan, note: options?.note },
       signal: options?.signal,
     });
     return this.validateResponse(

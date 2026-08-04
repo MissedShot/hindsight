@@ -774,6 +774,8 @@ async def retain_batch(
 
     # Convert dicts to RetainContent objects
     contents = _build_contents(contents_dicts, document_tags)
+    if any(content.peer_context is not None for content in contents) and not config.enable_peer_modeling:
+        raise ValueError("peer_context requires peer modeling to be enabled for this bank")
 
     # When contents have multiple distinct per-content document_ids and no
     # batch-level document_id, group by doc_id and process each group

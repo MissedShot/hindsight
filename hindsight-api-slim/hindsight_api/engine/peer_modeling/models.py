@@ -237,16 +237,46 @@ class PeerModelRequest(PeerModelBase):
 
 
 class PeerCorrectionRequest(PeerModelBase):
-    """Manual correction request; the engine always stores it locked and manual."""
+    """Natural-language correction to interpret against the current directional model."""
 
-    claim: PeerClaimDraft
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class PeerCorrectionClaimDraft(PeerModelBase):
+    """One stable claim proposed by the semantic correction planner."""
+
+    claim_type: PeerClaimType
+    text: str = Field(min_length=1, max_length=4000)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
+class PeerCorrectionPlanDraft(PeerModelBase):
+    """Strict structured output produced by the correction-planning LLM."""
+
+    claims: list[PeerCorrectionClaimDraft] = Field(default_factory=list, min_length=1, max_length=16)
+    supersede_claim_ids: list[str] = Field(default_factory=list, max_length=32)
+    reason: str = Field(min_length=1, max_length=4000)
+
+
+class PeerCorrectionPlan(PeerCorrectionPlanDraft):
+    """Version-bound correction plan shown to the caller before any mutation."""
+
+    correction_text: str = Field(min_length=1, max_length=4000)
+    base_model_version: int = Field(ge=1)
+
+
+class PeerCorrectionApplyRequest(PeerModelBase):
+    """Explicit request to apply a previously reviewed semantic correction plan."""
+
+    plan: PeerCorrectionPlan
     note: str | None = Field(default=None, max_length=4000)
 
 
 class PeerCorrectionResult(PeerModelBase):
-    """Atomic correction result containing the correction and its rematerialized model."""
+    """Atomic targeted correction result and its rematerialized directional model."""
 
-    claim: PeerClaim
+    claims: list[PeerClaim] = Field(default_factory=list)
+    superseded_claim_ids: list[str] = Field(default_factory=list)
     model: PeerModel
 
 
@@ -264,6 +294,14 @@ class PeerMaterializationResult(PeerModelBase):
     version: int
     claims_added: int
     card_entries: int
+
+
+class PeerPendingMemorySources(PeerModelBase):
+    """Exact incremental evidence window and its composite checkpoint."""
+
+    source_ids: list[str] = Field(default_factory=list)
+    next_cursor: datetime | None = None
+    next_cursor_id: str | None = None
 
 
 class PeerClaimWrite(PeerModelBase):
@@ -290,10 +328,13 @@ class PeerMaterializationPlan(PeerModelBase):
     target_peer_id: str
     version: int
     rebuild: bool = False
-    supersede_claim_type: PeerClaimType | None = None
+    supersede_claim_ids: list[str] = Field(default_factory=list)
+    reactivate_claim_ids: list[str] = Field(default_factory=list)
     claims: list[PeerClaimWrite] = Field(default_factory=list)
     card_entries: list[PeerCardEntry] = Field(default_factory=list)
     representation: str
+    source_cursor: datetime | None = None
+    source_cursor_id: str | None = None
 
 
 class PeerOperationMetadata(PeerModelBase):

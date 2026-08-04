@@ -1592,12 +1592,31 @@ class Hindsight:
         path = f"/{quote(observer_peer_id, safe='')}/rebuild/{quote(target_peer_id, safe='')}"
         return await self._apeer_request("POST", bank_id, path, body={"claims": []})
 
+    def plan_peer_correction(
+        self,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        text: str,
+    ) -> dict[str, Any]:
+        return _run_async(self.aplan_peer_correction(bank_id, observer_peer_id, target_peer_id, text))
+
+    async def aplan_peer_correction(
+        self,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        text: str,
+    ) -> dict[str, Any]:
+        path = f"/{quote(observer_peer_id, safe='')}/corrections/{quote(target_peer_id, safe='')}/plan"
+        return await self._apeer_request("POST", bank_id, path, body={"text": text})
+
     def correct_peer_model(
         self,
         bank_id: str,
         observer_peer_id: str,
         target_peer_id: str,
-        claim: dict[str, Any],
+        plan: dict[str, Any],
         *,
         note: str | None = None,
     ) -> dict[str, Any]:
@@ -1606,7 +1625,7 @@ class Hindsight:
                 bank_id,
                 observer_peer_id,
                 target_peer_id,
-                claim,
+                plan,
                 note=note,
             )
         )
@@ -1616,12 +1635,12 @@ class Hindsight:
         bank_id: str,
         observer_peer_id: str,
         target_peer_id: str,
-        claim: dict[str, Any],
+        plan: dict[str, Any],
         *,
         note: str | None = None,
     ) -> dict[str, Any]:
         path = f"/{quote(observer_peer_id, safe='')}/corrections/{quote(target_peer_id, safe='')}"
-        return await self._apeer_request("POST", bank_id, path, body={"claim": claim, "note": note})
+        return await self._apeer_request("POST", bank_id, path, body={"plan": plan, "note": note})
 
     def get_bank_config(self, bank_id: str) -> dict[str, Any]:
         """

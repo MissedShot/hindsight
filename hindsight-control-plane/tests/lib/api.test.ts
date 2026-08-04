@@ -163,8 +163,15 @@ describe("ControlPlaneClient peer direction routes", () => {
     await client.getPeerClaims("bank/a", "observer/a", "target/a");
     await client.modelPeer("bank/a", "observer/a", "target/a");
     await client.rebuildPeer("bank/a", "observer/a", "target/a");
+    await client.planPeerCorrection("bank/a", "observer/a", "target/a", "Known target");
     await client.createPeerCorrection("bank/a", "observer/a", "target/a", {
-      claim: { claim_type: "IDENTITY", text: "Known target" },
+      plan: {
+        correction_text: "Known target",
+        base_model_version: 1,
+        claims: [{ claim_type: "IDENTITY", text: "Known target", confidence: 1 }],
+        supersede_claim_ids: [],
+        reason: "Explicit correction",
+      },
     });
 
     const urls = fetchSpy.mock.calls.map((call: unknown[]) => String(call[0]));
@@ -173,6 +180,7 @@ describe("ControlPlaneClient peer direction routes", () => {
       "/api/banks/bank%2Fa/peers/observer%2Fa/claims?target=target%2Fa",
       "/api/banks/bank%2Fa/peers/observer%2Fa/model?target=target%2Fa",
       "/api/banks/bank%2Fa/peers/observer%2Fa/rebuild?target=target%2Fa",
+      "/api/banks/bank%2Fa/peers/observer%2Fa/corrections/plan?target=target%2Fa",
       "/api/banks/bank%2Fa/peers/observer%2Fa/corrections?target=target%2Fa",
     ]);
   });

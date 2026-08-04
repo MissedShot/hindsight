@@ -166,6 +166,8 @@ from hindsight_api.engine.peer_modeling.models import (
     Peer,
     PeerClaims,
     PeerContext,
+    PeerCorrectionApplyRequest,
+    PeerCorrectionPlan,
     PeerCorrectionRequest,
     PeerCorrectionResult,
     PeerCreate,
@@ -6388,6 +6390,30 @@ def _register_routes(app: FastAPI):
             _raise_peer_http_error(error)
 
     @app.post(
+        "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/corrections/{target_peer_id}/plan",
+        response_model=PeerCorrectionPlan,
+        operation_id="plan_peer_correction",
+        tags=["Peer Modeling"],
+    )
+    async def api_plan_peer_correction(
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        payload: PeerCorrectionRequest,
+        request_context: RequestContext = Depends(get_request_context),
+    ):
+        try:
+            return await app.state.memory.plan_peer_correction(
+                bank_id,
+                observer_peer_id,
+                target_peer_id,
+                payload,
+                request_context=request_context,
+            )
+        except (PeerFeatureDisabledError, PeerNotFoundError, PeerValidationError) as error:
+            _raise_peer_http_error(error)
+
+    @app.post(
         "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/corrections/{target_peer_id}",
         response_model=PeerCorrectionResult,
         operation_id="correct_peer_model",
@@ -6397,7 +6423,7 @@ def _register_routes(app: FastAPI):
         bank_id: str,
         observer_peer_id: str,
         target_peer_id: str,
-        payload: PeerCorrectionRequest,
+        payload: PeerCorrectionApplyRequest,
         request_context: RequestContext = Depends(get_request_context),
     ):
         try:
@@ -6408,7 +6434,7 @@ def _register_routes(app: FastAPI):
                 payload,
                 request_context=request_context,
             )
-        except (PeerFeatureDisabledError, PeerNotFoundError, PeerValidationError) as error:
+        except (PeerFeatureDisabledError, PeerNotFoundError, PeerConflictError, PeerValidationError) as error:
             _raise_peer_http_error(error)
 
     # =====================================================================

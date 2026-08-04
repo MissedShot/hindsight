@@ -88,6 +88,15 @@ _SKIP_TABLES = frozenset(
         # to fresh ids, so carrying them would only produce dangling associations.
         # Revert anything worth keeping on the source before migrating.
         "invalidated_memory_units",
+        # Native peer-model evidence links reference memory-unit UUIDs, while
+        # logical bank import regenerates those UUIDs. Until transfer carries an
+        # explicit old->new evidence-id map, export_bank rejects banks with peer
+        # state rather than silently producing an incomplete archive.
+        "peers",
+        "peer_models",
+        "peer_model_claims",
+        "peer_model_claim_sources",
+        "memory_peer_roles",
     }
 )
 # Derived columns dropped from carried rows so the target regenerates them with
@@ -298,6 +307,16 @@ async def export_bank(
     ``_current_schema`` and passes its raw connection; the engine acquires one
     after tenant auth).
     """
+    has_peer_state = await conn.fetchval(
+        f"SELECT EXISTS(SELECT 1 FROM {fq_table('peers')} WHERE bank_id = $1)",
+        bank_id,
+    )
+    if has_peer_state:
+        raise ValueError(
+            "Whole-bank transfer does not yet preserve native peer-modeling state; "
+            "use the physical admin backup/restore path for this bank"
+        )
+
     # Whole-bank export always carries observations (they're bank-level state)
     # and, with them, the per-fact consolidation lifecycle so the target restores
     # exact eligibility instead of re-consolidating historical facts (#2965).

@@ -89,6 +89,18 @@ def _normalize_claim(text: str) -> str:
     return " ".join(text.casefold().split())
 
 
+def _validated_final_evidence(
+    claim: _FinalClaim,
+    *,
+    source_pool: set[str],
+    min_pattern_sources: int,
+) -> list[str]:
+    """Enforce source-count policy after the LLM response."""
+    evidence = list(dict.fromkeys(source_id for source_id in claim.source_ids if source_id in source_pool))
+    minimum = 1 if claim.card_eligible else max(1, min_pattern_sources)
+    return evidence[:_MAX_SOURCE_IDS_PER_CLAIM] if len(evidence) >= minimum else []
+
+
 def _candidate_metadata(rows: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
     values: Counter[str] = Counter()
     contexts: list[str] = []
@@ -129,7 +141,11 @@ def _fallback_discovery(existing: list[Any], metadata_values: list[str], context
             context_names.extend(part.strip() for part in match.groups())
 
     human_external_id = next(
-        (value for value in metadata_values if value.casefold() not in {alias.casefold() for alias in observer_aliases}),
+        (
+            value
+            for value in metadata_values
+            if value.casefold() not in {alias.casefold() for alias in observer_aliases}
+        ),
         None,
     )
     human_aliases = [human_external_id] if human_external_id else []
@@ -148,7 +164,9 @@ def _fallback_discovery(existing: list[Any], metadata_values: list[str], context
         )
     ]
     if human_external_id:
-        display_name = next((alias for alias in human_aliases if alias.casefold() != human_external_id.casefold()), None)
+        display_name = next(
+            (alias for alias in human_aliases if alias.casefold() != human_external_id.casefold()), None
+        )
         peers.append(
             _DiscoveredPeer(
                 external_id=human_external_id,
@@ -386,14 +404,16 @@ async def _synthesize_claims(
     return parsed.claims
 
 
-async def _write_result_metadata(memory_engine: "MemoryEngine", operation_id: str | None, payload: dict[str, Any]) -> None:
+async def _write_result_metadata(
+    memory_engine: "MemoryEngine", operation_id: str | None, payload: dict[str, Any]
+) -> None:
     if not operation_id:
         return
     backend = await memory_engine._get_backend()
     async with acquire_with_retry(backend) as conn:
         await conn.execute(
             f"""
-            UPDATE {fq_table('async_operations')}
+            UPDATE {fq_table("async_operations")}
             SET result_metadata = COALESCE(result_metadata, '{{}}'::jsonb) || $2::jsonb,
                 updated_at = NOW()
             WHERE operation_id = $1
@@ -446,7 +466,11 @@ async def distill_directional_claims(
     source_pool = {source_id for proposal in proposals for source_id in proposal.source_ids}
     drafts: list[PeerClaimDraft] = []
     for claim in final_claims:
-        evidence = [source_id for source_id in claim.source_ids if source_id in source_pool]
+        evidence = _validated_final_evidence(
+            claim,
+            source_pool=source_pool,
+            min_pattern_sources=config.peer_model_min_pattern_sources,
+        )
         if not evidence:
             continue
         confidence = max(0.85, claim.confidence) if claim.card_eligible else min(0.8, claim.confidence)
@@ -455,7 +479,7 @@ async def distill_directional_claims(
                 claim_type=claim.claim_type,
                 text=claim.text,
                 confidence=confidence,
-                source_ids=list(dict.fromkeys(evidence))[:_MAX_SOURCE_IDS_PER_CLAIM],
+                source_ids=evidence,
             )
         )
     return drafts
@@ -483,7 +507,7 @@ async def run_peer_bootstrap(
         rows_raw = await conn.fetch(
             f"""
             SELECT id, text, context, metadata, fact_type, mentioned_at
-            FROM {fq_table('memory_units')}
+            FROM {fq_table("memory_units")}
             WHERE bank_id = $1
               AND fact_type = 'observation'
             ORDER BY mentioned_at ASC NULLS LAST, created_at ASC, id ASC
@@ -494,7 +518,7 @@ async def run_peer_bootstrap(
             rows_raw = await conn.fetch(
                 f"""
                 SELECT id, text, context, metadata, fact_type, mentioned_at
-                FROM {fq_table('memory_units')}
+                FROM {fq_table("memory_units")}
                 WHERE bank_id = $1
                   AND fact_type IN ('world', 'experience')
                 ORDER BY mentioned_at ASC NULLS LAST, created_at ASC, id ASC
@@ -534,7 +558,9 @@ async def run_peer_bootstrap(
         total=len(rows),
         detail={"evidence_total": len(rows), "existing_peers": len(existing)},
     )
-    logger.info("[PEER_BOOTSTRAP] bank=%s operation=%s phase=discovering_peers evidence=%d", bank_id, operation_id, len(rows))
+    logger.info(
+        "[PEER_BOOTSTRAP] bank=%s operation=%s phase=discovering_peers evidence=%d", bank_id, operation_id, len(rows)
+    )
     discovery = await _discover_peers(
         llm=llm,
         existing=existing,
@@ -543,11 +569,7 @@ async def run_peer_bootstrap(
     )
     peers, peers_created = await _upsert_discovered_peers(service, bank_id, discovery)
     observer = next(
-        (
-            peer
-            for peer in peers
-            if peer.external_id.casefold() == discovery.observer_external_id.casefold()
-        ),
+        (peer for peer in peers if peer.external_id.casefold() == discovery.observer_external_id.casefold()),
         peers[0] if peers else None,
     )
     if observer is None:
@@ -570,7 +592,11 @@ async def run_peer_bootstrap(
             valid_ids = {str(row["id"]) for row in batch_rows}
             for claim in extracted.claims:
                 target = next(
-                    (candidate for candidate in targets if candidate.external_id.casefold() == claim.target_external_id.casefold()),
+                    (
+                        candidate
+                        for candidate in targets
+                        if candidate.external_id.casefold() == claim.target_external_id.casefold()
+                    ),
                     None,
                 )
                 source_ids = [source_id for source_id in claim.source_ids if source_id in valid_ids]
@@ -633,7 +659,11 @@ async def run_peer_bootstrap(
         source_pool = {source_id for proposal in proposals for source_id in proposal.source_ids}
         drafts: list[PeerClaimDraft] = []
         for claim in final_claims:
-            source_ids = [source_id for source_id in claim.source_ids if source_id in source_pool]
+            source_ids = _validated_final_evidence(
+                claim,
+                source_pool=source_pool,
+                min_pattern_sources=config.peer_model_min_pattern_sources,
+            )
             if not source_ids:
                 ambiguous_count += 1
                 continue
@@ -643,7 +673,7 @@ async def run_peer_bootstrap(
                     claim_type=claim.claim_type,
                     text=claim.text,
                     confidence=confidence,
-                    source_ids=list(dict.fromkeys(source_ids))[:_MAX_SOURCE_IDS_PER_CLAIM],
+                    source_ids=source_ids,
                 )
             )
         if drafts:

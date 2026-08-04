@@ -1836,12 +1836,18 @@
     "cancel": "Cancel",
     "savePeer": "Save changes",
     "createPeer": "Create peer",
-    "correctionTitle": "Add locked correction",
-    "correctionDescription": "Add a correction to this observer → target direction without replacing the derived card.",
+    "correctionTitle": "Correct peer model",
+    "correctionDescription": "Describe the correction naturally. The model will classify it and propose exact claim-level changes for review.",
     "categoryLabel": "Claim category",
     "correctionTextLabel": "Correction",
-    "correctionTextPlaceholder": "State the durable correction clearly...",
-    "correctionLockedNotice": "This creates a locked correction claim. Later modeling must preserve it and the card will be refreshed from claims.",
-    "submitCorrection": "Submit correction"
+    "correctionTextPlaceholder": "State what is wrong and the durable correction...",
+    "correctionLockedNotice": "No change is applied yet. The model will infer the claim type, preserve unrelated claims, and show the exact replacement plan.",
+    "submitCorrection": "Submit correction",
+    "reviewCorrection": "Review plan",
+    "applyCorrection": "Apply correction",
+    "editCorrection": "Edit text",
+    "correctionPlanAdds": "New locked claims",
+    "correctionPlanReplaces": "Claims to supersede",
+    "correctionPlanNoReplacements": "No existing claims will be superseded."
   }
 }

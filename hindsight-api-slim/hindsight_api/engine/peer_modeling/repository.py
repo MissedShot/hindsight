@@ -10,12 +10,13 @@ from __future__ import annotations
 import json
 import uuid
 from collections import defaultdict
+from datetime import datetime
 from typing import Any
 
 from hindsight_api.engine.db import DatabaseBackend, DatabaseConnection
 from hindsight_api.engine.schema import fq_table
 
-from .errors import PeerConflictError, PeerNotFoundError
+from .errors import PeerConflictError
 from .models import (
     Peer,
     PeerCardEntry,
@@ -27,6 +28,7 @@ from .models import (
     PeerMaterializationPlan,
     PeerMaterializationResult,
     PeerModel,
+    PeerPendingMemorySources,
     PeerSource,
     PeerSourceKind,
 )
@@ -68,9 +70,10 @@ class PeerRepository:
         async with self._backend.acquire() as conn:
             await conn.execute(
                 f"""
-                INSERT INTO {fq_table('peers')}
+                INSERT INTO {fq_table("peers")}
                     (id, bank_id, external_id, display_name, kind, metadata)
                 VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                ON CONFLICT (bank_id, external_id) DO NOTHING
                 """,
                 _uuid_value(peer_id),
                 bank_id,
@@ -82,14 +85,14 @@ class PeerRepository:
             row = await conn.fetchrow(
                 f"""
                 SELECT id, bank_id, external_id, display_name, kind, metadata, created_at, updated_at
-                FROM {fq_table('peers')}
+                FROM {fq_table("peers")}
                 WHERE bank_id = $1 AND id = $2
                 """,
                 bank_id,
                 _uuid_value(peer_id),
             )
             if row is None:
-                raise PeerNotFoundError(f"Peer '{peer_id}' was not created")
+                raise PeerConflictError(f"Peer external_id '{external_id}' already exists in bank '{bank_id}'")
             return self._peer_from_row(conn, row)
 
     async def list_peers(self, *, bank_id: str, limit: int, offset: int) -> PeerList:
@@ -104,7 +107,7 @@ class PeerRepository:
             rows = await conn.fetch(
                 f"""
                 SELECT id, bank_id, external_id, display_name, kind, metadata, created_at, updated_at
-                FROM {fq_table('peers')}
+                FROM {fq_table("peers")}
                 WHERE bank_id = $1
                 ORDER BY created_at ASC, id ASC
                 LIMIT $2 OFFSET $3
@@ -125,7 +128,7 @@ class PeerRepository:
             row = await conn.fetchrow(
                 f"""
                 SELECT id, bank_id, external_id, display_name, kind, metadata, created_at, updated_at
-                FROM {fq_table('peers')}
+                FROM {fq_table("peers")}
                 WHERE bank_id = $1 AND id = $2
                 """,
                 bank_id,
@@ -174,7 +177,7 @@ class PeerRepository:
                 return None
             await conn.execute(
                 f"""
-                UPDATE {fq_table('peers')}
+                UPDATE {fq_table("peers")}
                 SET display_name = COALESCE($3, display_name),
                     kind = COALESCE($4, kind),
                     metadata = COALESCE($5::jsonb, metadata),
@@ -190,7 +193,7 @@ class PeerRepository:
             updated = await conn.fetchrow(
                 f"""
                 SELECT id, bank_id, external_id, display_name, kind, metadata, created_at, updated_at
-                FROM {fq_table('peers')}
+                FROM {fq_table("peers")}
                 WHERE bank_id = $1 AND id = $2
                 """,
                 bank_id,
@@ -202,7 +205,7 @@ class PeerRepository:
         async with self._backend.acquire() as conn:
             count = await conn.fetchval(
                 f"""
-                SELECT COUNT(*) FROM {fq_table('peers')}
+                SELECT COUNT(*) FROM {fq_table("peers")}
                 WHERE bank_id = $1 AND id IN ($2, $3)
                 """,
                 bank_id,
@@ -219,7 +222,7 @@ class PeerRepository:
             for source_id in source_ids:
                 found = await conn.fetchval(
                     f"""
-                    SELECT 1 FROM {fq_table('memory_units')}
+                    SELECT 1 FROM {fq_table("memory_units")}
                     WHERE bank_id = $1 AND id = $2::uuid
                     """,
                     bank_id,
@@ -236,14 +239,121 @@ class PeerRepository:
         async with self._backend.acquire() as conn:
             rows = await conn.fetch(
                 f"""
-                SELECT id, text FROM {fq_table('memory_units')}
+                SELECT id, text FROM {fq_table("memory_units")}
                 WHERE bank_id = $1
-                  AND id IN ({', '.join(f'${index + 2}' for index in range(len(source_ids)))})
+                  AND id IN ({", ".join(f"${index + 2}" for index in range(len(source_ids)))})
                 """,
                 bank_id,
                 *[_uuid_value(source_id) for source_id in source_ids],
             )
         return {str(row["id"]): str(row["text"]) for row in rows}
+
+    async def get_pending_memory_sources(
+        self,
+        *,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+    ) -> PeerPendingMemorySources:
+        """Return explicitly attributed facts not yet checkpointed for this pair."""
+        async with self._backend.acquire() as conn:
+            model_row = await self._model_row(conn, bank_id, observer_peer_id, target_peer_id)
+            cursor = None
+            cursor_id = None
+            if model_row is not None:
+                cursor = model_row["source_cursor"]
+                cursor_id = model_row["source_cursor_id"]
+            cursor_clause = ""
+            parameters: list[Any] = [
+                bank_id,
+                _uuid_value(observer_peer_id),
+                _uuid_value(target_peer_id),
+            ]
+            if cursor is not None and cursor_id is not None:
+                cursor_clause = " AND (memory.created_at > $4 OR (memory.created_at = $4 AND memory.id > $5))"
+                parameters.extend([cursor, _uuid_value(str(cursor_id))])
+            elif cursor is not None:
+                # Safe compatibility path for a timestamp-only checkpoint: replay
+                # the boundary rather than dropping same-timestamp evidence.
+                cursor_clause = " AND memory.created_at >= $4"
+                parameters.append(cursor)
+            rows = await conn.fetch(
+                f"""
+                SELECT DISTINCT memory.id, memory.created_at
+                FROM {fq_table("memory_units")} memory
+                JOIN {fq_table("memory_peer_roles")} observer_role
+                  ON observer_role.bank_id = memory.bank_id
+                 AND observer_role.memory_unit_id = memory.id
+                 AND observer_role.peer_id = $2
+                 AND observer_role.role = 'observer'
+                 AND observer_role.modality = 'actual'
+                JOIN {fq_table("memory_peer_roles")} target_role
+                  ON target_role.bank_id = memory.bank_id
+                 AND target_role.memory_unit_id = memory.id
+                 AND target_role.peer_id = $3
+                 AND target_role.role IN ('subject', 'participant')
+                 AND target_role.modality = 'actual'
+                WHERE memory.bank_id = $1{cursor_clause}
+                ORDER BY memory.created_at ASC, memory.id ASC
+                """,
+                *parameters,
+            )
+        source_ids = [str(row["id"]) for row in rows]
+        next_cursor = rows[-1]["created_at"] if rows else cursor
+        next_cursor_id = str(rows[-1]["id"]) if rows else (str(cursor_id) if cursor_id is not None else None)
+        return PeerPendingMemorySources(
+            source_ids=source_ids,
+            next_cursor=next_cursor,
+            next_cursor_id=next_cursor_id,
+        )
+
+    async def advance_source_cursor(
+        self,
+        *,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        source_cursor: datetime,
+        source_cursor_id: str,
+    ) -> None:
+        """Checkpoint processed evidence without changing card version or freshness."""
+        async with self._backend.acquire() as conn:
+            await self._advance_source_cursor(
+                conn,
+                bank_id=bank_id,
+                observer_peer_id=observer_peer_id,
+                target_peer_id=target_peer_id,
+                source_cursor=source_cursor,
+                source_cursor_id=source_cursor_id,
+            )
+
+    async def _advance_source_cursor(
+        self,
+        conn: DatabaseConnection,
+        *,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        source_cursor: datetime,
+        source_cursor_id: str,
+    ) -> None:
+        await conn.execute(
+            f"""
+            UPDATE {fq_table("peer_models")}
+            SET source_cursor = $4, source_cursor_id = $5
+            WHERE bank_id = $1 AND observer_peer_id = $2 AND target_peer_id = $3
+              AND (
+                    source_cursor IS NULL
+                 OR source_cursor < $4
+                 OR (source_cursor = $4 AND (source_cursor_id IS NULL OR source_cursor_id < $5))
+              )
+            """,
+            bank_id,
+            _uuid_value(observer_peer_id),
+            _uuid_value(target_peer_id),
+            source_cursor,
+            _uuid_value(source_cursor_id),
+        )
 
     async def get_directional_model(
         self,
@@ -293,7 +403,7 @@ class PeerRepository:
                 # first-time materializations where no peer_models row exists yet.
                 await conn.fetch(
                     f"""
-                    SELECT id FROM {fq_table('peers')}
+                    SELECT id FROM {fq_table("peers")}
                     WHERE bank_id = $1 AND id IN ($2, $3)
                     ORDER BY id FOR UPDATE
                     """,
@@ -303,7 +413,7 @@ class PeerRepository:
                 )
                 current_version = await conn.fetchval(
                     f"""
-                    SELECT version FROM {fq_table('peer_models')}
+                    SELECT version FROM {fq_table("peer_models")}
                     WHERE bank_id = $1 AND observer_peer_id = $2 AND target_peer_id = $3
                     FOR UPDATE
                     """,
@@ -318,7 +428,7 @@ class PeerRepository:
                     )
                 await conn.execute(
                     f"""
-                    INSERT INTO {fq_table('peer_models')}
+                    INSERT INTO {fq_table("peer_models")}
                         (id, bank_id, observer_peer_id, target_peer_id, version, card, representation)
                     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
                     ON CONFLICT (bank_id, observer_peer_id, target_peer_id) DO UPDATE SET
@@ -335,10 +445,19 @@ class PeerRepository:
                     card_json,
                     plan.representation,
                 )
+                if plan.source_cursor is not None and plan.source_cursor_id is not None:
+                    await self._advance_source_cursor(
+                        conn,
+                        bank_id=plan.bank_id,
+                        observer_peer_id=plan.observer_peer_id,
+                        target_peer_id=plan.target_peer_id,
+                        source_cursor=plan.source_cursor,
+                        source_cursor_id=plan.source_cursor_id,
+                    )
                 if plan.rebuild:
                     await conn.execute(
                         f"""
-                        UPDATE {fq_table('peer_model_claims')}
+                        UPDATE {fq_table("peer_model_claims")}
                         SET status = 'superseded', updated_at = NOW()
                         WHERE bank_id = $1 AND model_id = $2
                           AND status = 'active' AND locked = FALSE AND origin = 'derived'
@@ -346,24 +465,39 @@ class PeerRepository:
                         plan.bank_id,
                         _uuid_value(plan.model_id),
                     )
-                if plan.supersede_claim_type is not None:
+                # Corrections target exact reviewed claim IDs. The former broad
+                # claim-type update allowed one ATTRIBUTE edit to supersede every
+                # unrelated attribute in the directional model.
+                for claim_id in plan.supersede_claim_ids:
                     await conn.execute(
                         f"""
-                        UPDATE {fq_table('peer_model_claims')}
+                        UPDATE {fq_table("peer_model_claims")}
                         SET status = 'superseded', updated_at = NOW()
-                        WHERE bank_id = $1 AND model_id = $2
-                          AND claim_type = $3 AND status = 'active' AND locked = FALSE
+                        WHERE bank_id = $1 AND model_id = $2 AND id = $3
+                          AND status = 'active'
                         """,
                         plan.bank_id,
                         _uuid_value(plan.model_id),
-                        plan.supersede_claim_type.value,
+                        _uuid_value(claim_id),
+                    )
+                for claim_id in plan.reactivate_claim_ids:
+                    await conn.execute(
+                        f"""
+                        UPDATE {fq_table("peer_model_claims")}
+                        SET status = 'active', updated_at = NOW()
+                        WHERE bank_id = $1 AND model_id = $2 AND id = $3
+                          AND status = 'superseded'
+                        """,
+                        plan.bank_id,
+                        _uuid_value(plan.model_id),
+                        _uuid_value(claim_id),
                     )
                 for claim in plan.claims:
                     existing_id = None
                     if claim.origin == PeerClaimOrigin.DERIVED:
                         existing_id = await conn.fetchval(
                             f"""
-                            SELECT id FROM {fq_table('peer_model_claims')}
+                            SELECT id FROM {fq_table("peer_model_claims")}
                             WHERE bank_id = $1 AND model_id = $2 AND claim_type = $3
                               AND text = $4 AND origin = $5 AND status = 'active'
                             """,
@@ -377,7 +511,7 @@ class PeerRepository:
                     if existing_id is None:
                         await conn.execute(
                             f"""
-                            INSERT INTO {fq_table('peer_model_claims')}
+                            INSERT INTO {fq_table("peer_model_claims")}
                                 (id, bank_id, model_id, observer_peer_id, target_peer_id,
                                  claim_type, text, status, origin, confidence, locked, provenance)
                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
@@ -399,7 +533,7 @@ class PeerRepository:
                     for source_id in claim.source_ids:
                         await conn.execute(
                             f"""
-                            INSERT INTO {fq_table('peer_model_claim_sources')}
+                            INSERT INTO {fq_table("peer_model_claim_sources")}
                                 (bank_id, claim_id, source_kind, source_id)
                             VALUES ($1, $2, $3, $4)
                             ON CONFLICT (bank_id, claim_id, source_kind, source_id) DO NOTHING
@@ -423,7 +557,7 @@ class PeerRepository:
                 SELECT id, bank_id, model_id, observer_peer_id, target_peer_id,
                        claim_type, text, status, origin, confidence, locked, provenance,
                        valid_from, valid_until, created_at, updated_at
-                FROM {fq_table('peer_model_claims')}
+                FROM {fq_table("peer_model_claims")}
                 WHERE bank_id = $1 AND id = $2
                 """,
                 bank_id,
@@ -444,14 +578,14 @@ class PeerRepository:
         return await conn.fetchrow(
             f"""
             SELECT id, bank_id, observer_peer_id, target_peer_id, version, card,
-                   representation, created_at, updated_at
-            FROM {fq_table('peer_models')}
+                   representation, source_cursor, source_cursor_id, created_at, updated_at
+            FROM {fq_table("peer_models")}
             WHERE bank_id = $1 AND observer_peer_id = $2 AND target_peer_id = $3
             """,
             bank_id,
             _uuid_value(observer_peer_id),
             _uuid_value(target_peer_id),
-            )
+        )
 
     async def _claims_for_model(
         self,
@@ -465,7 +599,7 @@ class PeerRepository:
             SELECT id, bank_id, model_id, observer_peer_id, target_peer_id,
                    claim_type, text, status, origin, confidence, locked, provenance,
                    valid_from, valid_until, created_at, updated_at
-            FROM {fq_table('peer_model_claims')}
+            FROM {fq_table("peer_model_claims")}
             WHERE bank_id = $1 AND model_id = $2
             ORDER BY locked DESC, created_at ASC, id ASC
             """,
@@ -488,8 +622,8 @@ class PeerRepository:
         rows = await conn.fetch(
             f"""
             SELECT claim_id, source_kind, source_id
-            FROM {fq_table('peer_model_claim_sources')}
-            WHERE bank_id = $1 AND claim_id IN ({', '.join(f'${index + 2}' for index in range(len(claim_ids)))})
+            FROM {fq_table("peer_model_claim_sources")}
+            WHERE bank_id = $1 AND claim_id IN ({", ".join(f"${index + 2}" for index in range(len(claim_ids)))})
             ORDER BY claim_id ASC, source_kind ASC, source_id ASC
             """,
             bank_id,

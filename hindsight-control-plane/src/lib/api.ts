@@ -108,6 +108,26 @@ export interface PeerOperationResponse {
   [key: string]: unknown;
 }
 
+export interface PeerCorrectionClaimDraft {
+  claim_type: PeerClaimCategory;
+  text: string;
+  confidence: number;
+}
+
+export interface PeerCorrectionPlan {
+  correction_text: string;
+  base_model_version: number;
+  claims: PeerCorrectionClaimDraft[];
+  supersede_claim_ids: string[];
+  reason: string;
+}
+
+export interface PeerCorrectionResult {
+  claims: PeerClaim[];
+  superseded_claim_ids: string[];
+  model: Record<string, unknown>;
+}
+
 export interface WebhookHttpConfig {
   method: string;
   timeout_seconds: number;
@@ -1914,21 +1934,31 @@ export class ControlPlaneClient {
     );
   }
 
+  async planPeerCorrection(
+    bankId: string,
+    observerId: string,
+    targetId: string,
+    text: string
+  ): Promise<PeerCorrectionPlan> {
+    return this.fetchApi<PeerCorrectionPlan>(
+      bankApi(
+        bankId,
+        `/peers/${encodeURIComponent(observerId)}/corrections/plan?target=${encodeURIComponent(targetId)}`
+      ),
+      {
+        method: "POST",
+        body: JSON.stringify({ text }),
+      }
+    );
+  }
+
   async createPeerCorrection(
     bankId: string,
     observerId: string,
     targetId: string,
-    params: {
-      claim: {
-        claim_type: PeerClaimCategory;
-        text: string;
-        source_kind?: "manual";
-        source_ids?: string[];
-      };
-      note?: string;
-    }
-  ): Promise<PeerClaim | PeerOperationResponse> {
-    return this.fetchApi<PeerClaim | PeerOperationResponse>(
+    params: { plan: PeerCorrectionPlan; note?: string }
+  ): Promise<PeerCorrectionResult> {
+    return this.fetchApi<PeerCorrectionResult>(
       bankApi(
         bankId,
         `/peers/${encodeURIComponent(observerId)}/corrections?target=${encodeURIComponent(targetId)}`

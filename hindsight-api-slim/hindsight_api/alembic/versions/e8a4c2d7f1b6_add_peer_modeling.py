@@ -140,8 +140,7 @@ def _pg_downgrade() -> None:
 def _oracle_create(sql: str) -> None:
     escaped = sql.replace("'", "''")
     op.execute(
-        f"BEGIN EXECUTE IMMEDIATE '{escaped}'; "
-        "EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF; END;"
+        f"BEGIN EXECUTE IMMEDIATE '{escaped}'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF; END;"
     )
 
 

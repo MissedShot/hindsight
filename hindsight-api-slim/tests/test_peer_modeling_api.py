@@ -5,6 +5,32 @@ import uuid
 
 import pytest
 
+from hindsight_api.engine.peer_modeling.repository import PeerRepository
+
+
+@pytest.mark.asyncio
+async def test_peer_context_is_rejected_when_peer_modeling_is_disabled(api_client):
+    bank_id = f"peer-disabled-{uuid.uuid4()}"
+    create_bank = await api_client.put(f"/v1/default/banks/{bank_id}", json={"name": "Peer disabled"})
+    assert create_bank.status_code == 200, create_bank.text
+
+    response = await api_client.post(
+        f"/v1/default/banks/{bank_id}/memories",
+        json={
+            "items": [
+                {
+                    "content": "This attribution must not be silently discarded.",
+                    "peer_context": {
+                        "observer_peer_id": str(uuid.uuid4()),
+                        "subject_peer_ids": [str(uuid.uuid4())],
+                    },
+                }
+            ]
+        },
+    )
+    assert response.status_code == 400, response.text
+    assert "peer_context requires peer modeling" in response.text
+
 
 @pytest.mark.asyncio
 async def test_peer_modeling_crud_context_and_manual_correction(api_client, memory):
@@ -45,14 +71,10 @@ async def test_peer_modeling_crud_context_and_manual_correction(api_client, memo
     assert peers_response.status_code == 200, peers_response.text
     assert peers_response.json()["total"] == 2
 
-    model_response = await api_client.post(
-        f"/v1/default/banks/{test_bank_id}/peers/{observer_id}/model/{target_id}"
-    )
+    model_response = await api_client.post(f"/v1/default/banks/{test_bank_id}/peers/{observer_id}/model/{target_id}")
     assert model_response.status_code == 202, model_response.text
     operation_id = model_response.json()["operation_id"]
-    operation_response = await api_client.get(
-        f"/v1/default/banks/{test_bank_id}/operations/{operation_id}"
-    )
+    operation_response = await api_client.get(f"/v1/default/banks/{test_bank_id}/operations/{operation_id}")
     assert operation_response.status_code == 200, operation_response.text
     operation = operation_response.json()
     assert operation["status"] == "completed"
@@ -61,24 +83,29 @@ async def test_peer_modeling_crud_context_and_manual_correction(api_client, memo
     correction_response = await api_client.post(
         f"/v1/default/banks/{test_bank_id}/peers/{observer_id}/corrections/{target_id}",
         json={
-            "claim": {
-                "claim_type": "IDENTITY",
-                "text": "Target prefers illustrated gardening notes.",
-                "confidence": 1.0,
-                "source_kind": "manual",
+            "plan": {
+                "correction_text": "Target prefers illustrated gardening notes.",
+                "base_model_version": 1,
+                "claims": [
+                    {
+                        "claim_type": "IDENTITY",
+                        "text": "Target prefers illustrated gardening notes.",
+                        "confidence": 1.0,
+                    }
+                ],
+                "supersede_claim_ids": [],
+                "reason": "Explicit operator correction",
             },
             "note": "Explicit operator correction",
         },
     )
     assert correction_response.status_code == 200, correction_response.text
     correction = correction_response.json()
-    assert correction["claim"]["origin"] == "manual"
-    assert correction["claim"]["locked"] is True
+    assert correction["claims"][0]["origin"] == "manual"
+    assert correction["claims"][0]["locked"] is True
     assert correction["model"]["card"]["entries"][0]["text"] == "Target prefers illustrated gardening notes."
 
-    context_response = await api_client.get(
-        f"/v1/default/banks/{test_bank_id}/peers/{observer_id}/context/{target_id}"
-    )
+    context_response = await api_client.get(f"/v1/default/banks/{test_bank_id}/peers/{observer_id}/context/{target_id}")
     assert context_response.status_code == 200, context_response.text
     context = context_response.json()
     assert context["observer_peer_id"] == observer_id
@@ -141,17 +168,15 @@ async def test_peer_modeling_crud_context_and_manual_correction(api_client, memo
         },
     )
     assert evidence_model_response.status_code == 202, evidence_model_response.text
-    context_response = await api_client.get(
-        f"/v1/default/banks/{test_bank_id}/peers/{observer_id}/context/{target_id}"
-    )
+    context_response = await api_client.get(f"/v1/default/banks/{test_bank_id}/peers/{observer_id}/context/{target_id}")
     context = context_response.json()
     assert "Target collects antique postcards." in context["representation"]
-    assert [entry["text"] for entry in context["card"]["entries"]] == [
-        "Target prefers illustrated gardening notes."
-    ]
+    assert [entry["text"] for entry in context["card"]["entries"]] == ["Target prefers illustrated gardening notes."]
 
 
 class _BootstrapLLM:
+    no_incremental_claims = False
+
     def with_config(self, *_args, **_kwargs):
         return self
 
@@ -180,6 +205,8 @@ class _BootstrapLLM:
                 }
             )
         if response_format.__name__ == "_ClaimBatch":
+            if self.no_incremental_claims:
+                return response_format.model_validate({"claims": [], "ambiguous_count": 0})
             target = payload["allowed_peers"][0]["external_id"]
             source_ids = [item["id"] for item in payload["evidence"]]
             if target != "morgan-fixture":
@@ -208,6 +235,8 @@ class _BootstrapLLM:
                 }
             )
         if response_format.__name__ == "_FinalClaims":
+            if self.no_incremental_claims:
+                return response_format.model_validate({"claims": []})
             return response_format.model_validate(
                 {
                     "claims": [
@@ -308,7 +337,7 @@ async def test_peer_bootstrap_discovers_peers_materializes_cards_and_reports_pro
         json={
             "updates": {
                 "peer_model_cooldown_seconds": 0,
-                "peer_model_min_new_facts": 2,
+                "peer_model_min_new_facts": 8,
                 "enable_auto_consolidation": False,
             }
         },
@@ -332,6 +361,30 @@ async def test_peer_bootstrap_discovers_peers_materializes_cards_and_reports_pro
         },
     )
     assert incremental_response.status_code == 200, incremental_response.text
+    first_context_response = await api_client.get(
+        f"/v1/default/banks/{bank_id}/peers/{observer_id}/context/{peers['morgan-fixture']['id']}"
+    )
+    assert first_context_response.status_code == 200, first_context_response.text
+    assert first_context_response.json()["version"] == context["version"]
+
+    second_incremental_response = await api_client.post(
+        f"/v1/default/banks/{bank_id}/memories",
+        json={
+            "items": [
+                {
+                    "content": "Morgan also restores vintage radios and catalogs spare parts.",
+                    "peer_context": {
+                        "observer_peer_id": observer_id,
+                        "speaker_peer_id": peers["morgan-fixture"]["id"],
+                        "subject_peer_ids": [peers["morgan-fixture"]["id"]],
+                        "source_message_id": "incremental-message-2",
+                        "session_id": "incremental-session-2",
+                    },
+                }
+            ]
+        },
+    )
+    assert second_incremental_response.status_code == 200, second_incremental_response.text
     claims_response = await api_client.get(
         f"/v1/default/banks/{bank_id}/peers/{observer_id}/claims/{peers['morgan-fixture']['id']}"
     )
@@ -343,3 +396,102 @@ async def test_peer_bootstrap_discovers_peers_materializes_cards_and_reports_pro
         for source in claim["sources"]
         if source["source_kind"] == "memory_unit"
     )
+
+    modeled_context_response = await api_client.get(
+        f"/v1/default/banks/{bank_id}/peers/{observer_id}/context/{peers['morgan-fixture']['id']}"
+    )
+    version_before_noop = modeled_context_response.json()["version"]
+    memory._consolidation_llm_config.no_incremental_claims = True
+    for index in range(3, 5):
+        noop_response = await api_client.post(
+            f"/v1/default/banks/{bank_id}/memories",
+            json={
+                "items": [
+                    {
+                        "content": f"Routine travel note {index} with no durable profile change.",
+                        "peer_context": {
+                            "observer_peer_id": observer_id,
+                            "speaker_peer_id": peers["morgan-fixture"]["id"],
+                            "subject_peer_ids": [peers["morgan-fixture"]["id"]],
+                            "source_message_id": f"incremental-message-{index}",
+                            "session_id": f"incremental-session-{index}",
+                        },
+                    }
+                ]
+            },
+        )
+        assert noop_response.status_code == 200, noop_response.text
+
+    noop_context_response = await api_client.get(
+        f"/v1/default/banks/{bank_id}/peers/{observer_id}/context/{peers['morgan-fixture']['id']}"
+    )
+    assert noop_context_response.json()["version"] == version_before_noop
+    async with backend.acquire() as conn:
+        cursor_row = await conn.fetchrow(
+            "SELECT source_cursor, source_cursor_id FROM peer_models "
+            "WHERE bank_id = $1 AND observer_peer_id = $2 AND target_peer_id = $3",
+            bank_id,
+            uuid.UUID(observer_id),
+            uuid.UUID(peers["morgan-fixture"]["id"]),
+        )
+        assert cursor_row["source_cursor"] is not None
+        assert cursor_row["source_cursor_id"] is not None
+
+        tie_ids = [
+            uuid.UUID("ffffffff-ffff-ffff-ffff-fffffffffff0"),
+            uuid.UUID("ffffffff-ffff-ffff-ffff-fffffffffff1"),
+        ]
+        for tie_id in tie_ids:
+            await conn.execute(
+                """
+                INSERT INTO memory_units (id, bank_id, text, fact_type, context, metadata, created_at)
+                VALUES ($1, $2, $3, 'world', '', '{}'::jsonb, $4)
+                """,
+                tie_id,
+                bank_id,
+                f"same-timestamp evidence {tie_id}",
+                cursor_row["source_cursor"],
+            )
+            for role, peer_id in (
+                ("observer", observer_id),
+                ("subject", peers["morgan-fixture"]["id"]),
+            ):
+                await conn.execute(
+                    """
+                    INSERT INTO memory_peer_roles
+                        (id, bank_id, memory_unit_id, peer_id, role, modality)
+                    VALUES ($1, $2, $3, $4, $5, 'actual')
+                    """,
+                    uuid.uuid4(),
+                    bank_id,
+                    tie_id,
+                    uuid.UUID(peer_id),
+                    role,
+                )
+
+    repository = PeerRepository(backend)
+    pending = await repository.get_pending_memory_sources(
+        bank_id=bank_id,
+        observer_peer_id=observer_id,
+        target_peer_id=peers["morgan-fixture"]["id"],
+    )
+    assert pending.source_ids[-2:] == [str(value) for value in tie_ids]
+    assert pending.next_cursor_id == str(tie_ids[-1])
+    next_cursor = pending.next_cursor
+    next_cursor_id = pending.next_cursor_id
+    assert next_cursor is not None
+    assert next_cursor_id is not None
+    await repository.advance_source_cursor(
+        bank_id=bank_id,
+        observer_peer_id=observer_id,
+        target_peer_id=peers["morgan-fixture"]["id"],
+        source_cursor=next_cursor,
+        source_cursor_id=next_cursor_id,
+    )
+    assert not (
+        await repository.get_pending_memory_sources(
+            bank_id=bank_id,
+            observer_peer_id=observer_id,
+            target_peer_id=peers["morgan-fixture"]["id"],
+        )
+    ).source_ids
