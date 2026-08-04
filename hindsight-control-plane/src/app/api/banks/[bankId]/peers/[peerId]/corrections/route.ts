@@ -1,4 +1,8 @@
-import { proxyPeerRequest, invalidPeerJsonResponse } from "@/lib/peer-proxy";
+import {
+  proxyPeerRequest,
+  invalidPeerJsonResponse,
+  missingPeerTargetResponse,
+} from "@/lib/peer-proxy";
 
 export async function POST(
   request: Request,
@@ -12,11 +16,12 @@ export async function POST(
     return invalidPeerJsonResponse(request);
   }
 
-  const query = new URL(request.url).search;
+  const target = new URL(request.url).searchParams.get("target");
+  if (!target) return missingPeerTargetResponse(request);
   return proxyPeerRequest(
     request,
     bankId,
-    `/peers/${encodeURIComponent(peerId)}/corrections${query}`,
+    `/peers/${encodeURIComponent(peerId)}/corrections/${encodeURIComponent(target)}`,
     {
       method: "POST",
       body,

@@ -12,6 +12,7 @@ from datetime import datetime
 from importlib import metadata
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import quote
 
 import hindsight_client_api
 
@@ -39,14 +40,14 @@ from hindsight_client_api.models import (
     reflect_request,
     retain_request,
 )
-from hindsight_client_api.models.reflect_include_options import ReflectIncludeOptions
-from hindsight_client_api.models.tool_calls_include_options import ToolCallsIncludeOptions
 from hindsight_client_api.models.bank_profile_response import BankProfileResponse
 from hindsight_client_api.models.file_retain_response import FileRetainResponse
 from hindsight_client_api.models.list_memory_units_response import ListMemoryUnitsResponse
 from hindsight_client_api.models.recall_response import RecallResponse
+from hindsight_client_api.models.reflect_include_options import ReflectIncludeOptions
 from hindsight_client_api.models.reflect_response import ReflectResponse
 from hindsight_client_api.models.retain_response import RetainResponse
+from hindsight_client_api.models.tool_calls_include_options import ToolCallsIncludeOptions
 from hindsight_client_api.models.version_response import VersionResponse
 
 
@@ -1441,6 +1442,179 @@ class Hindsight:
             directive_id: The directive ID
         """
         return _run_async(self._directives_api.delete_directive(bank_id, directive_id, _request_timeout=self._timeout))
+
+    async def _apeer_request(
+        self,
+        method: str,
+        bank_id: str,
+        path: str = "",
+        *,
+        body: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Call the opt-in peer API without waiting for generated-client releases."""
+        import aiohttp
+
+        encoded_bank = quote(bank_id, safe="")
+        url = f"{self._base_url}/v1/default/banks/{encoded_bank}/peers{path}"
+        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
+        async with aiohttp.ClientSession() as session:
+            async with session.request(
+                method,
+                url,
+                json=body,
+                params=params,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=self._timeout),
+            ) as resp:
+                resp.raise_for_status()
+                return await resp.json()
+
+    def create_peer(
+        self,
+        bank_id: str,
+        external_id: str,
+        *,
+        display_name: str | None = None,
+        kind: str = "person",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return _run_async(
+            self.acreate_peer(
+                bank_id,
+                external_id,
+                display_name=display_name,
+                kind=kind,
+                metadata=metadata,
+            )
+        )
+
+    async def acreate_peer(
+        self,
+        bank_id: str,
+        external_id: str,
+        *,
+        display_name: str | None = None,
+        kind: str = "person",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return await self._apeer_request(
+            "POST",
+            bank_id,
+            body={
+                "external_id": external_id,
+                "display_name": display_name,
+                "kind": kind,
+                "metadata": metadata or {},
+            },
+        )
+
+    def list_peers(self, bank_id: str, *, limit: int = 100, offset: int = 0) -> dict[str, Any]:
+        return _run_async(self.alist_peers(bank_id, limit=limit, offset=offset))
+
+    async def alist_peers(self, bank_id: str, *, limit: int = 100, offset: int = 0) -> dict[str, Any]:
+        return await self._apeer_request("GET", bank_id, params={"limit": limit, "offset": offset})
+
+    def get_peer(self, bank_id: str, peer_id: str) -> dict[str, Any]:
+        return _run_async(self.aget_peer(bank_id, peer_id))
+
+    async def aget_peer(self, bank_id: str, peer_id: str) -> dict[str, Any]:
+        return await self._apeer_request("GET", bank_id, f"/{quote(peer_id, safe='')}")
+
+    def update_peer(self, bank_id: str, peer_id: str, **updates: Any) -> dict[str, Any]:
+        return _run_async(self.aupdate_peer(bank_id, peer_id, **updates))
+
+    async def aupdate_peer(self, bank_id: str, peer_id: str, **updates: Any) -> dict[str, Any]:
+        return await self._apeer_request("PATCH", bank_id, f"/{quote(peer_id, safe='')}", body=updates)
+
+    def get_peer_context(self, bank_id: str, observer_peer_id: str, target_peer_id: str) -> dict[str, Any]:
+        return _run_async(self.aget_peer_context(bank_id, observer_peer_id, target_peer_id))
+
+    async def aget_peer_context(
+        self, bank_id: str, observer_peer_id: str, target_peer_id: str
+    ) -> dict[str, Any]:
+        path = f"/{quote(observer_peer_id, safe='')}/context/{quote(target_peer_id, safe='')}"
+        return await self._apeer_request("GET", bank_id, path)
+
+    def get_peer_claims(self, bank_id: str, observer_peer_id: str, target_peer_id: str) -> dict[str, Any]:
+        return _run_async(self.aget_peer_claims(bank_id, observer_peer_id, target_peer_id))
+
+    async def aget_peer_claims(
+        self, bank_id: str, observer_peer_id: str, target_peer_id: str
+    ) -> dict[str, Any]:
+        path = f"/{quote(observer_peer_id, safe='')}/claims/{quote(target_peer_id, safe='')}"
+        return await self._apeer_request("GET", bank_id, path)
+
+    def model_peer(
+        self,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        *,
+        claims: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        return _run_async(
+            self.amodel_peer(bank_id, observer_peer_id, target_peer_id, claims=claims)
+        )
+
+    async def amodel_peer(
+        self,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        *,
+        claims: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        path = f"/{quote(observer_peer_id, safe='')}/model/{quote(target_peer_id, safe='')}"
+        return await self._apeer_request("POST", bank_id, path, body={"claims": claims or []})
+
+    def rebuild_peer_model(
+        self,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+    ) -> dict[str, Any]:
+        return _run_async(self.arebuild_peer_model(bank_id, observer_peer_id, target_peer_id))
+
+    async def arebuild_peer_model(
+        self,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+    ) -> dict[str, Any]:
+        path = f"/{quote(observer_peer_id, safe='')}/rebuild/{quote(target_peer_id, safe='')}"
+        return await self._apeer_request("POST", bank_id, path, body={"claims": []})
+
+    def correct_peer_model(
+        self,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        claim: dict[str, Any],
+        *,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        return _run_async(
+            self.acorrect_peer_model(
+                bank_id,
+                observer_peer_id,
+                target_peer_id,
+                claim,
+                note=note,
+            )
+        )
+
+    async def acorrect_peer_model(
+        self,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        claim: dict[str, Any],
+        *,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        path = f"/{quote(observer_peer_id, safe='')}/corrections/{quote(target_peer_id, safe='')}"
+        return await self._apeer_request("POST", bank_id, path, body={"claim": claim, "note": note})
 
     def get_bank_config(self, bank_id: str) -> dict[str, Any]:
         """

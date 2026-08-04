@@ -123,6 +123,50 @@ export interface MemoryItemInput {
   update_mode?: "replace" | "append";
 }
 
+export type PeerClaimType = "IDENTITY" | "ATTRIBUTE" | "RELATIONSHIP" | "INSTRUCTION";
+
+export interface PeerClaimDraft {
+  claim_type: PeerClaimType;
+  text: string;
+  confidence?: number;
+  source_kind?: "memory_unit" | "manual";
+  source_ids?: string[];
+}
+
+export interface Peer {
+  id: string;
+  bank_id: string;
+  external_id: string;
+  display_name: string | null;
+  kind: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PeerList {
+  items: Peer[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface PeerOperation {
+  operation_id: string;
+  deduplicated: boolean;
+}
+
+export interface PeerContext {
+  bank_id: string;
+  observer_peer_id: string;
+  target_peer_id: string;
+  model_id: string;
+  version: number;
+  card: { entries: Array<Record<string, unknown>>; updated_at: string };
+  representation: string;
+  claims: Array<Record<string, unknown>>;
+}
+
 /**
  * Warn when a caller-supplied operationId will be silently ignored.
  *
@@ -512,6 +556,142 @@ export class HindsightClient {
     });
 
     return this.validateResponse(response, "listMemories");
+  }
+
+  async listPeers(
+    bankId: string,
+    options?: { limit?: number; offset?: number; signal?: AbortSignal }
+  ): Promise<PeerList> {
+    const response = await this.client.get({
+      url: `/v1/default/banks/${encodeURIComponent(bankId)}/peers`,
+      query: { limit: options?.limit, offset: options?.offset },
+      signal: options?.signal,
+    });
+    return this.validateResponse(response as { data?: PeerList; error?: unknown; response?: Response }, "listPeers");
+  }
+
+  async createPeer(
+    bankId: string,
+    peer: { external_id: string; display_name?: string; kind?: string; metadata?: Record<string, unknown> },
+    options?: { signal?: AbortSignal }
+  ): Promise<Peer> {
+    const response = await this.client.post({
+      url: `/v1/default/banks/${encodeURIComponent(bankId)}/peers`,
+      body: peer,
+      signal: options?.signal,
+    });
+    return this.validateResponse(response as { data?: Peer; error?: unknown; response?: Response }, "createPeer");
+  }
+
+  async getPeer(bankId: string, peerId: string, options?: { signal?: AbortSignal }): Promise<Peer> {
+    const response = await this.client.get({
+      url: `/v1/default/banks/${encodeURIComponent(bankId)}/peers/${encodeURIComponent(peerId)}`,
+      signal: options?.signal,
+    });
+    return this.validateResponse(response as { data?: Peer; error?: unknown; response?: Response }, "getPeer");
+  }
+
+  async updatePeer(
+    bankId: string,
+    peerId: string,
+    updates: { display_name?: string | null; kind?: string; metadata?: Record<string, unknown> },
+    options?: { signal?: AbortSignal }
+  ): Promise<Peer> {
+    const response = await this.client.patch({
+      url: `/v1/default/banks/${encodeURIComponent(bankId)}/peers/${encodeURIComponent(peerId)}`,
+      body: updates,
+      signal: options?.signal,
+    });
+    return this.validateResponse(response as { data?: Peer; error?: unknown; response?: Response }, "updatePeer");
+  }
+
+  async getPeerContext(
+    bankId: string,
+    observerPeerId: string,
+    targetPeerId: string,
+    options?: { signal?: AbortSignal }
+  ): Promise<PeerContext> {
+    const response = await this.client.get({
+      url: `/v1/default/banks/${encodeURIComponent(bankId)}/peers/${encodeURIComponent(observerPeerId)}/context/${encodeURIComponent(targetPeerId)}`,
+      signal: options?.signal,
+    });
+    return this.validateResponse(
+      response as { data?: PeerContext; error?: unknown; response?: Response },
+      "getPeerContext"
+    );
+  }
+
+  async getPeerClaims(
+    bankId: string,
+    observerPeerId: string,
+    targetPeerId: string,
+    options?: { signal?: AbortSignal }
+  ): Promise<{ observer_peer_id: string; target_peer_id: string; items: Array<Record<string, unknown>> }> {
+    const response = await this.client.get({
+      url: `/v1/default/banks/${encodeURIComponent(bankId)}/peers/${encodeURIComponent(observerPeerId)}/claims/${encodeURIComponent(targetPeerId)}`,
+      signal: options?.signal,
+    });
+    return this.validateResponse(
+      response as {
+        data?: { observer_peer_id: string; target_peer_id: string; items: Array<Record<string, unknown>> };
+        error?: unknown;
+        response?: Response;
+      },
+      "getPeerClaims"
+    );
+  }
+
+  async modelPeer(
+    bankId: string,
+    observerPeerId: string,
+    targetPeerId: string,
+    claims: PeerClaimDraft[] = [],
+    options?: { signal?: AbortSignal }
+  ): Promise<PeerOperation> {
+    const response = await this.client.post({
+      url: `/v1/default/banks/${encodeURIComponent(bankId)}/peers/${encodeURIComponent(observerPeerId)}/model/${encodeURIComponent(targetPeerId)}`,
+      body: { claims },
+      signal: options?.signal,
+    });
+    return this.validateResponse(
+      response as { data?: PeerOperation; error?: unknown; response?: Response },
+      "modelPeer"
+    );
+  }
+
+  async rebuildPeerModel(
+    bankId: string,
+    observerPeerId: string,
+    targetPeerId: string,
+    options?: { signal?: AbortSignal }
+  ): Promise<Record<string, unknown>> {
+    const response = await this.client.post({
+      url: `/v1/default/banks/${encodeURIComponent(bankId)}/peers/${encodeURIComponent(observerPeerId)}/rebuild/${encodeURIComponent(targetPeerId)}`,
+      body: { claims: [] },
+      signal: options?.signal,
+    });
+    return this.validateResponse(
+      response as { data?: Record<string, unknown>; error?: unknown; response?: Response },
+      "rebuildPeerModel"
+    );
+  }
+
+  async correctPeerModel(
+    bankId: string,
+    observerPeerId: string,
+    targetPeerId: string,
+    claim: PeerClaimDraft,
+    options?: { note?: string; signal?: AbortSignal }
+  ): Promise<Record<string, unknown>> {
+    const response = await this.client.post({
+      url: `/v1/default/banks/${encodeURIComponent(bankId)}/peers/${encodeURIComponent(observerPeerId)}/corrections/${encodeURIComponent(targetPeerId)}`,
+      body: { claim, note: options?.note },
+      signal: options?.signal,
+    });
+    return this.validateResponse(
+      response as { data?: Record<string, unknown>; error?: unknown; response?: Response },
+      "correctPeerModel"
+    );
   }
 
   /**

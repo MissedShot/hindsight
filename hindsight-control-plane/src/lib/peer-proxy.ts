@@ -19,6 +19,16 @@ export function invalidPeerJsonResponse(request: Request) {
   );
 }
 
+export function missingPeerTargetResponse(request: Request) {
+  return NextResponse.json(
+    localizeApiErrorPayload(request, {
+      error: "Missing target peer",
+      errorKey: "api.errors.auth.invalidRequestBody",
+    }),
+    { status: 400 }
+  );
+}
+
 /**
  * Proxy the peer surface without depending on the generated dataplane SDK.
  * Credentials stay in the server-side dataplane helper, while upstream status

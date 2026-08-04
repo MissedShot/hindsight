@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const dataplaneBankUrl = vi.fn();
+const { dataplaneBankUrl } = vi.hoisted(() => ({ dataplaneBankUrl: vi.fn() }));
 vi.mock("@/lib/hindsight-client", () => ({
   dataplaneBankUrl,
   getDataplaneHeaders: vi.fn(() => ({})),
@@ -30,7 +30,7 @@ describe("GET peer context proxy", () => {
     await expect(response.json()).resolves.toEqual({ observer_id: "self", target_id: "person/a" });
     expect(dataplaneBankUrl).toHaveBeenCalledWith(
       "bank:/%",
-      "/peers/self%2Fagent/context?target=person%2Fa"
+      "/peers/self%2Fagent/context/person%2Fa"
     );
   });
 });

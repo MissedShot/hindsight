@@ -3959,6 +3959,719 @@
         }
       }
     },
+    "/v1/default/banks/{bank_id}/peers": {
+      "get": {
+        "tags": [
+          "Peer Modeling"
+        ],
+        "summary": "Api List Peers",
+        "operationId": "list_peers",
+        "parameters": [
+          {
+            "name": "bank_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Peer Modeling"
+        ],
+        "summary": "Api Create Peer",
+        "operationId": "create_peer",
+        "parameters": [
+          {
+            "name": "bank_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PeerCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Peer"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/default/banks/{bank_id}/peers/{peer_id}": {
+      "get": {
+        "tags": [
+          "Peer Modeling"
+        ],
+        "summary": "Api Get Peer",
+        "operationId": "get_peer",
+        "parameters": [
+          {
+            "name": "bank_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Id"
+            }
+          },
+          {
+            "name": "peer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Peer Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Peer"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Peer Modeling"
+        ],
+        "summary": "Api Update Peer",
+        "operationId": "update_peer",
+        "parameters": [
+          {
+            "name": "bank_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Id"
+            }
+          },
+          {
+            "name": "peer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Peer Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PeerUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Peer"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/context/{target_peer_id}": {
+      "get": {
+        "tags": [
+          "Peer Modeling"
+        ],
+        "summary": "Api Get Peer Context",
+        "operationId": "get_peer_context",
+        "parameters": [
+          {
+            "name": "bank_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Id"
+            }
+          },
+          {
+            "name": "observer_peer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Observer Peer Id"
+            }
+          },
+          {
+            "name": "target_peer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Target Peer Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerContext"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/claims/{target_peer_id}": {
+      "get": {
+        "tags": [
+          "Peer Modeling"
+        ],
+        "summary": "Api Get Peer Claims",
+        "operationId": "get_peer_claims",
+        "parameters": [
+          {
+            "name": "bank_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Id"
+            }
+          },
+          {
+            "name": "observer_peer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Observer Peer Id"
+            }
+          },
+          {
+            "name": "target_peer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Target Peer Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerClaims"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/model/{target_peer_id}": {
+      "post": {
+        "tags": [
+          "Peer Modeling"
+        ],
+        "summary": "Api Model Peer",
+        "operationId": "model_peer",
+        "parameters": [
+          {
+            "name": "bank_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Id"
+            }
+          },
+          {
+            "name": "observer_peer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Observer Peer Id"
+            }
+          },
+          {
+            "name": "target_peer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Target Peer Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PeerModelRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerOperation"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/rebuild/{target_peer_id}": {
+      "post": {
+        "tags": [
+          "Peer Modeling"
+        ],
+        "summary": "Api Rebuild Peer Model",
+        "operationId": "rebuild_peer_model",
+        "parameters": [
+          {
+            "name": "bank_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Id"
+            }
+          },
+          {
+            "name": "observer_peer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Observer Peer Id"
+            }
+          },
+          {
+            "name": "target_peer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Target Peer Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PeerModelRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/corrections/{target_peer_id}": {
+      "post": {
+        "tags": [
+          "Peer Modeling"
+        ],
+        "summary": "Api Correct Peer Model",
+        "operationId": "correct_peer_model",
+        "parameters": [
+          {
+            "name": "bank_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Id"
+            }
+          },
+          {
+            "name": "observer_peer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Observer Peer Id"
+            }
+          },
+          {
+            "name": "target_peer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Target Peer Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PeerCorrectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerCorrectionResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/default/banks/{bank_id}/import": {
       "post": {
         "tags": [
@@ -9009,6 +9722,11 @@
             "title": "Observations",
             "description": "Whether observations (auto-consolidation) are enabled"
           },
+          "peer_modeling": {
+            "type": "boolean",
+            "title": "Peer Modeling",
+            "description": "Whether directional peer cards and representations are enabled"
+          },
           "mcp": {
             "type": "boolean",
             "title": "Mcp",
@@ -9063,6 +9781,7 @@
         "type": "object",
         "required": [
           "observations",
+          "peer_modeling",
           "mcp",
           "worker",
           "bank_config_api",
@@ -9994,6 +10713,17 @@
             ],
             "title": "ObservationScopes",
             "description": "How to scope observations during consolidation. 'per_tag' runs one consolidation pass per individual tag, creating separate observations for each tag. 'combined' (default) runs a single pass with all tags together. 'shared' runs a single pass over one global, untagged scope, so memories consolidate together regardless of their tags \u2014 useful for deduplicating across volatile per-call provenance tags (e.g. per-session ids) while keeping those tags on the source facts. A list of tag lists runs one pass per inner list, giving full control over which combinations to use."
+          },
+          "peer_context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RetainPeerContext"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Explicit observer/speaker/subject attribution for native peer modeling. Peer modeling must be enabled and referenced peers must exist in this bank."
           },
           "strategy": {
             "anyOf": [
@@ -11063,6 +11793,699 @@
           ],
           "total": 150
         }
+      },
+      "Peer": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "bank_id": {
+            "type": "string",
+            "title": "Bank Id"
+          },
+          "external_id": {
+            "type": "string",
+            "title": "External Id"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "bank_id",
+          "external_id",
+          "display_name",
+          "kind",
+          "metadata",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "Peer",
+        "description": "A peer identity scoped to exactly one bank."
+      },
+      "PeerCard": {
+        "properties": {
+          "model_id": {
+            "type": "string",
+            "title": "Model Id"
+          },
+          "bank_id": {
+            "type": "string",
+            "title": "Bank Id"
+          },
+          "observer_peer_id": {
+            "type": "string",
+            "title": "Observer Peer Id"
+          },
+          "target_peer_id": {
+            "type": "string",
+            "title": "Target Peer Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/PeerCardEntry"
+            },
+            "type": "array",
+            "title": "Entries"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "model_id",
+          "bank_id",
+          "observer_peer_id",
+          "target_peer_id",
+          "version",
+          "updated_at"
+        ],
+        "title": "PeerCard",
+        "description": "Stable, compact projection limited to the four allowed claim types."
+      },
+      "PeerCardEntry": {
+        "properties": {
+          "claim_id": {
+            "type": "string",
+            "title": "Claim Id"
+          },
+          "claim_type": {
+            "$ref": "#/components/schemas/PeerClaimType"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence"
+          },
+          "locked": {
+            "type": "boolean",
+            "title": "Locked"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "claim_id",
+          "claim_type",
+          "text",
+          "confidence",
+          "locked"
+        ],
+        "title": "PeerCardEntry",
+        "description": "Typed compact-card projection of a claim."
+      },
+      "PeerClaim": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "bank_id": {
+            "type": "string",
+            "title": "Bank Id"
+          },
+          "model_id": {
+            "type": "string",
+            "title": "Model Id"
+          },
+          "observer_peer_id": {
+            "type": "string",
+            "title": "Observer Peer Id"
+          },
+          "target_peer_id": {
+            "type": "string",
+            "title": "Target Peer Id"
+          },
+          "claim_type": {
+            "$ref": "#/components/schemas/PeerClaimType"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PeerClaimStatus"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/PeerClaimOrigin"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence"
+          },
+          "locked": {
+            "type": "boolean",
+            "title": "Locked"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provenance"
+          },
+          "valid_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid From"
+          },
+          "valid_until": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/PeerSource"
+            },
+            "type": "array",
+            "title": "Sources"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "bank_id",
+          "model_id",
+          "observer_peer_id",
+          "target_peer_id",
+          "claim_type",
+          "text",
+          "status",
+          "origin",
+          "confidence",
+          "locked",
+          "provenance",
+          "valid_from",
+          "valid_until",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PeerClaim",
+        "description": "Persisted atomic claim with explicit lifecycle and provenance."
+      },
+      "PeerClaimDraft": {
+        "properties": {
+          "claim_type": {
+            "$ref": "#/components/schemas/PeerClaimType"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Text"
+          },
+          "confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "default": 0.7
+          },
+          "source_kind": {
+            "$ref": "#/components/schemas/PeerSourceKind",
+            "default": "memory_unit"
+          },
+          "source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "title": "Source Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "claim_type",
+          "text"
+        ],
+        "title": "PeerClaimDraft",
+        "description": "Caller-supplied claim proposal before origin/status are assigned by the engine."
+      },
+      "PeerClaimOrigin": {
+        "type": "string",
+        "enum": [
+          "derived",
+          "manual",
+          "imported"
+        ],
+        "title": "PeerClaimOrigin",
+        "description": "How a claim entered the model."
+      },
+      "PeerClaimStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "superseded",
+          "contested",
+          "retracted"
+        ],
+        "title": "PeerClaimStatus",
+        "description": "Lifecycle state of an atomic peer claim."
+      },
+      "PeerClaimType": {
+        "type": "string",
+        "enum": [
+          "IDENTITY",
+          "ATTRIBUTE",
+          "RELATIONSHIP",
+          "INSTRUCTION"
+        ],
+        "title": "PeerClaimType",
+        "description": "Taxonomy allowed in the compact peer card."
+      },
+      "PeerClaims": {
+        "properties": {
+          "observer_peer_id": {
+            "type": "string",
+            "title": "Observer Peer Id"
+          },
+          "target_peer_id": {
+            "type": "string",
+            "title": "Target Peer Id"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PeerClaim"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "observer_peer_id",
+          "target_peer_id"
+        ],
+        "title": "PeerClaims",
+        "description": "Directional claim collection."
+      },
+      "PeerContext": {
+        "properties": {
+          "bank_id": {
+            "type": "string",
+            "title": "Bank Id"
+          },
+          "observer_peer_id": {
+            "type": "string",
+            "title": "Observer Peer Id"
+          },
+          "target_peer_id": {
+            "type": "string",
+            "title": "Target Peer Id"
+          },
+          "model_id": {
+            "type": "string",
+            "title": "Model Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "card": {
+            "$ref": "#/components/schemas/PeerCard"
+          },
+          "representation": {
+            "type": "string",
+            "title": "Representation"
+          },
+          "claims": {
+            "items": {
+              "$ref": "#/components/schemas/PeerClaim"
+            },
+            "type": "array",
+            "title": "Claims"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "bank_id",
+          "observer_peer_id",
+          "target_peer_id",
+          "model_id",
+          "version",
+          "card",
+          "representation"
+        ],
+        "title": "PeerContext",
+        "description": "Typed context projection used by callers before a future retain seam exists."
+      },
+      "PeerCorrectionRequest": {
+        "properties": {
+          "claim": {
+            "$ref": "#/components/schemas/PeerClaimDraft"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "claim"
+        ],
+        "title": "PeerCorrectionRequest",
+        "description": "Manual correction request; the engine always stores it locked and manual."
+      },
+      "PeerCorrectionResult": {
+        "properties": {
+          "claim": {
+            "$ref": "#/components/schemas/PeerClaim"
+          },
+          "model": {
+            "$ref": "#/components/schemas/PeerModel"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "claim",
+          "model"
+        ],
+        "title": "PeerCorrectionResult",
+        "description": "Atomic correction result containing the correction and its rematerialized model."
+      },
+      "PeerCreate": {
+        "properties": {
+          "external_id": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "External Id"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "kind": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Kind",
+            "default": "person"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "external_id"
+        ],
+        "title": "PeerCreate",
+        "description": "Request to create one bank-scoped peer identity."
+      },
+      "PeerList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Peer"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "PeerList",
+        "description": "Paginated peer collection."
+      },
+      "PeerModel": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "bank_id": {
+            "type": "string",
+            "title": "Bank Id"
+          },
+          "observer_peer_id": {
+            "type": "string",
+            "title": "Observer Peer Id"
+          },
+          "target_peer_id": {
+            "type": "string",
+            "title": "Target Peer Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "card": {
+            "$ref": "#/components/schemas/PeerCard"
+          },
+          "representation": {
+            "type": "string",
+            "title": "Representation"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "bank_id",
+          "observer_peer_id",
+          "target_peer_id",
+          "version",
+          "card",
+          "representation",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PeerModel",
+        "description": "Materialized directional model without untyped card payloads."
+      },
+      "PeerModelRequest": {
+        "properties": {
+          "claims": {
+            "items": {
+              "$ref": "#/components/schemas/PeerClaimDraft"
+            },
+            "type": "array",
+            "maxItems": 256,
+            "title": "Claims"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PeerModelRequest",
+        "description": "Request body for model/rebuild; claims are optional supplied evidence proposals."
+      },
+      "PeerOperation": {
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "title": "Operation Id"
+          },
+          "deduplicated": {
+            "type": "boolean",
+            "title": "Deduplicated",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operation_id"
+        ],
+        "title": "PeerOperation",
+        "description": "Stable async-operation acknowledgement."
+      },
+      "PeerSource": {
+        "properties": {
+          "source_kind": {
+            "$ref": "#/components/schemas/PeerSourceKind"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_kind",
+          "source_id"
+        ],
+        "title": "PeerSource",
+        "description": "One relational provenance edge for a claim."
+      },
+      "PeerSourceKind": {
+        "type": "string",
+        "enum": [
+          "memory_unit",
+          "manual"
+        ],
+        "title": "PeerSourceKind",
+        "description": "Portable source-link namespaces supported by the first slice."
+      },
+      "PeerUpdate": {
+        "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PeerUpdate",
+        "description": "Mutable peer fields; external_id remains the stable identity key."
       },
       "RecallRequest": {
         "properties": {
@@ -12204,6 +13627,93 @@
         "title": "ReprocessDocumentResponse",
         "description": "Response model for reprocess document endpoint."
       },
+      "RetainPeerContext": {
+        "properties": {
+          "observer_peer_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observer Peer Id"
+          },
+          "speaker_peer_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speaker Peer Id"
+          },
+          "subject_peer_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "title": "Subject Peer Ids"
+          },
+          "participant_peer_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "title": "Participant Peer Ids"
+          },
+          "source_message_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1024,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Message Id"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1024,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "modality": {
+            "type": "string",
+            "enum": [
+              "actual",
+              "hypothetical",
+              "fictional",
+              "quoted"
+            ],
+            "title": "Modality",
+            "default": "actual"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "RetainPeerContext",
+        "description": "Explicit participant attribution carried through retain.\n\nIDs may be either a peer's internal ``id`` or its bank-scoped ``external_id``.\nThis metadata is declarative input; Hindsight does not infer speaker or subject\nidentity from free-form text at the HTTP boundary."
+      },
       "RetainRequest": {
         "properties": {
           "items": {
@@ -13129,6 +14639,7 @@
             "file_upload_api": true,
             "mcp": true,
             "observations": false,
+            "peer_modeling": false,
             "worker": true
           }
         }

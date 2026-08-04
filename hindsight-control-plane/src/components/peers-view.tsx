@@ -99,7 +99,10 @@ function getSourceIds(entry: Record<string, unknown>): string[] {
   }
   if (Array.isArray(entry.sources)) {
     return entry.sources
-      .map((source: unknown) => asRecord(source)?.id)
+      .map((source: unknown) => {
+        const record = asRecord(source);
+        return record?.source_id ?? record?.id;
+      })
       .filter((sourceId): sourceId is string => typeof sourceId === "string");
   }
   if (Array.isArray(entry.evidence)) {
@@ -141,6 +144,15 @@ function extractCard(response: PeerContextResponse | null): Record<CardCategory,
 
   const cardRecord = asRecord(card);
   if (!cardRecord) return empty;
+  if (Array.isArray(cardRecord.entries)) {
+    for (const rawEntry of cardRecord.entries) {
+      const entry = asRecord(rawEntry);
+      if (!entry) continue;
+      const category = getCategory(entry) ?? "ATTRIBUTE";
+      empty[category].push(entry as PeerCardEntry);
+    }
+    return empty;
+  }
   const entriesRecord = asRecord(cardRecord.entries) ?? cardRecord;
   for (const category of CARD_CATEGORIES) {
     const raw = entriesRecord[category] ?? entriesRecord[category.toLowerCase()];
@@ -304,7 +316,7 @@ export function PeersView({ enabled }: { enabled: boolean }) {
         toast.success(t("peerUpdated"));
       } else {
         await client.createPeer(currentBank, {
-          id: peerForm.id.trim(),
+          external_id: peerForm.id.trim(),
           kind: peerForm.kind,
           ...(metadata === undefined ? {} : { metadata }),
         });

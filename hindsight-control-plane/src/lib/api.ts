@@ -35,8 +35,8 @@ export type PeerKind = "person" | "agent" | "team" | "project" | "organization" 
 
 export interface Peer {
   id: string;
-  bank_id?: string;
-  external_id?: string | null;
+  bank_id: string;
+  external_id: string;
   display_name?: string | null;
   kind: PeerKind;
   metadata?: Record<string, unknown> | null;
@@ -49,6 +49,7 @@ export type PeerClaimCategory = "IDENTITY" | "ATTRIBUTE" | "RELATIONSHIP" | "INS
 
 export interface PeerClaim {
   id: string;
+  claim_type?: PeerClaimCategory | null;
   text?: string | null;
   claim?: string | null;
   category?: PeerClaimCategory | null;
@@ -81,8 +82,9 @@ export interface PeerCardEntry {
 }
 
 export interface PeerContextResponse {
-  observer_id?: string;
-  target_id?: string;
+  observer_peer_id?: string;
+  target_peer_id?: string;
+  model_id?: string;
   version?: number | string | null;
   updated_at?: string | null;
   card?: Record<string, unknown> | PeerCardEntry[] | null;
@@ -101,8 +103,8 @@ export interface PeerClaimsResponse {
 }
 
 export interface PeerOperationResponse {
-  operation_id?: string | null;
-  status?: string | null;
+  operation_id: string;
+  deduplicated: boolean;
   [key: string]: unknown;
 }
 
@@ -1825,7 +1827,7 @@ export class ControlPlaneClient {
   async createPeer(
     bankId: string,
     params: {
-      id: string;
+      external_id: string;
       display_name?: string;
       kind: PeerKind;
       metadata?: Record<string, unknown>;

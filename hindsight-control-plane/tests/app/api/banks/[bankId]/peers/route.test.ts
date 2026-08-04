@@ -1,8 +1,13 @@
 import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const dataplaneBankUrl = vi.fn();
-const getDataplaneHeaders = vi.fn(() => ({ Authorization: "Bearer test" }));
+const { dataplaneBankUrl, getDataplaneHeaders } = vi.hoisted(() => ({
+  dataplaneBankUrl: vi.fn(),
+  getDataplaneHeaders: vi.fn((extra: Record<string, string> = {}) => ({
+    Authorization: "Bearer test",
+    ...extra,
+  })),
+}));
 
 vi.mock("@/lib/hindsight-client", () => ({
   dataplaneBankUrl,
@@ -50,7 +55,7 @@ describe("bank peer proxy routes", () => {
       new Request("http://localhost/api/banks/bank/peers", {
         method: "POST",
         headers: { "accept-language": "en" },
-        body: JSON.stringify({ id: "self", kind: "agent", metadata: { role: "owner" } }),
+        body: JSON.stringify({ external_id: "self", kind: "agent", metadata: { role: "owner" } }),
       }),
       params("bank")
     );
@@ -65,7 +70,7 @@ describe("bank peer proxy routes", () => {
       expect.objectContaining({
         method: "POST",
         headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
-        body: JSON.stringify({ id: "self", kind: "agent", metadata: { role: "owner" } }),
+        body: JSON.stringify({ external_id: "self", kind: "agent", metadata: { role: "owner" } }),
       })
     );
   });

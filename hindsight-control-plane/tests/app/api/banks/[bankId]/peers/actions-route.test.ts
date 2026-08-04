@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const dataplaneBankUrl = vi.fn();
-const getDataplaneHeaders = vi.fn(() => ({ Authorization: "Bearer test" }));
+const { dataplaneBankUrl, getDataplaneHeaders } = vi.hoisted(() => ({
+  dataplaneBankUrl: vi.fn(),
+  getDataplaneHeaders: vi.fn((extra: Record<string, string> = {}) => ({
+    Authorization: "Bearer test",
+    ...extra,
+  })),
+}));
 
 vi.mock("@/lib/hindsight-client", () => ({
   dataplaneBankUrl,
@@ -80,7 +85,7 @@ describe("peer detail and action proxy routes", () => {
 
     expect(fetchSpy).toHaveBeenCalledWith(
       "https://dataplane.test/v1/default/banks/bank%3A%2F%25/peers/observer%2F1/" +
-        `${_name}?target=target%2F2`,
+        `${_name}/target%2F2`,
       expect.objectContaining({ method })
     );
   });
@@ -103,7 +108,7 @@ describe("peer detail and action proxy routes", () => {
 
     expect(response.status).toBe(201);
     expect(fetchSpy).toHaveBeenCalledWith(
-      "https://dataplane.test/v1/default/banks/bank%3A%2F%25/peers/observer%2F1/corrections?target=target%2F2",
+      "https://dataplane.test/v1/default/banks/bank%3A%2F%25/peers/observer%2F1/corrections/target%2F2",
       expect.objectContaining({ method: "POST", body: JSON.stringify(body) })
     );
   });
