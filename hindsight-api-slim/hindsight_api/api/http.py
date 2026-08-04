@@ -588,6 +588,54 @@ class EntityInput(BaseModel):
     type: str | None = Field(default=None, description="Optional entity type (e.g., 'PERSON', 'ORG', 'CONCEPT')")
 
 
+class RetainPeerContext(BaseModel):
+    """Explicit participant attribution carried through retain.
+
+    IDs may be either a peer's internal ``id`` or its bank-scoped ``external_id``.
+    This metadata is declarative input; Hindsight does not infer speaker or subject
+    identity from free-form text at the HTTP boundary.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    observer_peer_id: str | None = Field(default=None, min_length=1, max_length=512)
+    speaker_peer_id: str | None = Field(default=None, min_length=1, max_length=512)
+    subject_peer_ids: list[str] = Field(default_factory=list, max_length=64)
+    participant_peer_ids: list[str] = Field(default_factory=list, max_length=64)
+    source_message_id: str | None = Field(default=None, min_length=1, max_length=1024)
+    session_id: str | None = Field(default=None, min_length=1, max_length=1024)
+    modality: Literal["actual", "hypothetical", "fictional", "quoted"] = "actual"
+
+    @field_validator("subject_peer_ids", "participant_peer_ids")
+    @classmethod
+    def normalize_peer_ids(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            stripped = value.strip()
+            if not stripped:
+                raise ValueError("peer ids must not be blank")
+            if len(stripped) > 512:
+                raise ValueError("peer ids must be at most 512 characters")
+            if stripped not in seen:
+                normalized.append(stripped)
+                seen.add(stripped)
+        return normalized
+
+    @model_validator(mode="after")
+    def require_attribution(self) -> "RetainPeerContext":
+        if not any(
+            (
+                self.observer_peer_id,
+                self.speaker_peer_id,
+                self.subject_peer_ids,
+                self.participant_peer_ids,
+            )
+        ):
+            raise ValueError("peer_context must identify at least one peer")
+        return self
+
+
 class MemoryItem(BaseModel):
     """Single memory item for retain."""
 
@@ -665,6 +713,13 @@ class MemoryItem(BaseModel):
             "regardless of their tags — useful for deduplicating across volatile per-call provenance tags "
             "(e.g. per-session ids) while keeping those tags on the source facts. "
             "A list of tag lists runs one pass per inner list, giving full control over which combinations to use."
+        ),
+    )
+    peer_context: RetainPeerContext | None = Field(
+        default=None,
+        description=(
+            "Explicit observer/speaker/subject attribution for native peer modeling. "
+            "Peer modeling must be enabled and referenced peers must exist in this bank."
         ),
     )
     strategy: str | None = Field(
@@ -6992,6 +7047,8 @@ def _register_routes(app: FastAPI):
                     content_dict["tags"] = item.tags
                 if item.observation_scopes is not None:
                     content_dict["observation_scopes"] = item.observation_scopes
+                if item.peer_context is not None:
+                    content_dict["peer_context"] = item.peer_context.model_dump(exclude_none=True)
                 if item.update_mode is not None:
                     content_dict["update_mode"] = item.update_mode
                 strategy_groups[effective].append(content_dict)
