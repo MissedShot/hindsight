@@ -15,7 +15,15 @@ async def test_peer_modeling_crud_context_and_manual_correction(api_client, memo
     assert bank_response.status_code == 200, bank_response.text
     config_response = await api_client.patch(
         f"/v1/default/banks/{test_bank_id}/config",
-        json={"updates": {"enable_peer_modeling": True}},
+        json={
+            "updates": {
+                "enable_peer_modeling": True,
+                "enable_auto_peer_modeling": True,
+                "peer_model_min_new_facts": 2,
+                "peer_model_min_pattern_sources": 2,
+                "peer_model_cooldown_seconds": 0,
+            }
+        },
     )
     assert config_response.status_code == 200, config_response.text
 
@@ -39,8 +47,15 @@ async def test_peer_modeling_crud_context_and_manual_correction(api_client, memo
     model_response = await api_client.post(
         f"/v1/default/banks/{test_bank_id}/peers/{observer_id}/model/{target_id}"
     )
-    assert model_response.status_code == 200, model_response.text
-    assert model_response.json()["card"]["entries"] == []
+    assert model_response.status_code == 202, model_response.text
+    operation_id = model_response.json()["operation_id"]
+    operation_response = await api_client.get(
+        f"/v1/default/banks/{test_bank_id}/operations/{operation_id}"
+    )
+    assert operation_response.status_code == 200, operation_response.text
+    operation = operation_response.json()
+    assert operation["status"] == "completed"
+    assert operation["result_metadata"]["peer_model"]["version"] == 1
 
     correction_response = await api_client.post(
         f"/v1/default/banks/{test_bank_id}/peers/{observer_id}/corrections/{target_id}",
@@ -92,7 +107,7 @@ async def test_peer_modeling_crud_context_and_manual_correction(api_client, memo
     backend = await memory._get_backend()
     async with backend.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT role, modality, source_message_id, session_id "
+            "SELECT memory_unit_id, role, modality, source_message_id, session_id "
             "FROM memory_peer_roles WHERE bank_id = $1 ORDER BY role",
             test_bank_id,
         )
@@ -100,3 +115,36 @@ async def test_peer_modeling_crud_context_and_manual_correction(api_client, memo
     assert {row["modality"] for row in rows} == {"actual"}
     assert {row["source_message_id"] for row in rows} == {"message-1"}
     assert {row["session_id"] for row in rows} == {"session-1"}
+
+    auto_context_response = await api_client.get(
+        f"/v1/default/banks/{test_bank_id}/peers/{observer_id}/context/{target_id}"
+    )
+    auto_context = auto_context_response.json()
+    assert auto_context["representation"]
+    assert [entry["text"] for entry in auto_context["card"]["entries"]] == [
+        "Target prefers illustrated gardening notes."
+    ]
+
+    source_id = str(next(row["memory_unit_id"] for row in rows if row["role"] == "subject"))
+    evidence_model_response = await api_client.post(
+        f"/v1/default/banks/{test_bank_id}/peers/{observer_id}/model/{target_id}",
+        json={
+            "claims": [
+                {
+                    "claim_type": "ATTRIBUTE",
+                    "text": "Target collects antique postcards.",
+                    "confidence": 0.7,
+                    "source_ids": [source_id],
+                }
+            ]
+        },
+    )
+    assert evidence_model_response.status_code == 202, evidence_model_response.text
+    context_response = await api_client.get(
+        f"/v1/default/banks/{test_bank_id}/peers/{observer_id}/context/{target_id}"
+    )
+    context = context_response.json()
+    assert "Target collects antique postcards." in context["representation"]
+    assert [entry["text"] for entry in context["card"]["entries"]] == [
+        "Target prefers illustrated gardening notes."
+    ]

@@ -204,6 +204,65 @@ class PeerModelingService:
             raise PeerNotFoundError("Peer model was not materialized")
         return rebuilt
 
+    async def model(
+        self,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        payload: PeerModelRequest | None = None,
+    ) -> PeerModel:
+        """Materialize supplied evidence claims through the worker-safe domain path."""
+        await self.validate_model_request(bank_id, observer_peer_id, target_peer_id, payload)
+        model, claims = await self._load_model_and_claims(bank_id, observer_peer_id, target_peer_id)
+        existing_derived = {
+            (claim.claim_type, claim.text): claim
+            for claim in claims
+            if claim.origin == PeerClaimOrigin.DERIVED and claim.status == PeerClaimStatus.ACTIVE
+        }
+        new_claims: list[PeerClaimWrite] = []
+        for draft in (payload.claims if payload else []):
+            existing = existing_derived.get((draft.claim_type, draft.text))
+            existing_sources = {
+                source.source_id
+                for source in (existing.sources if existing else [])
+                if source.source_kind == draft.source_kind
+            }
+            if existing is not None and set(draft.source_ids).issubset(existing_sources):
+                continue
+            new_claims.append(
+                PeerClaimWrite(
+                    id=str(uuid.uuid4()),
+                    claim_type=draft.claim_type,
+                    text=draft.text,
+                    confidence=draft.confidence,
+                    origin=PeerClaimOrigin.DERIVED,
+                    locked=False,
+                    provenance="peer_modeling",
+                    source_kind=draft.source_kind,
+                    source_ids=draft.source_ids,
+                )
+            )
+        if model is not None and not new_claims:
+            return model
+        plan = self._build_plan(
+            bank_id=bank_id,
+            observer_peer_id=observer_peer_id,
+            target_peer_id=target_peer_id,
+            model=model,
+            claims=claims,
+            new_claims=new_claims,
+            supersede_claim_type=None,
+        )
+        await self.repository.apply_materialization(plan)
+        materialized = await self.repository.get_directional_model(
+            bank_id=bank_id,
+            observer_peer_id=observer_peer_id,
+            target_peer_id=target_peer_id,
+        )
+        if materialized is None:
+            raise PeerNotFoundError("Peer model was not materialized")
+        return materialized
+
     async def validate_model_request(
         self,
         bank_id: str,
@@ -215,6 +274,8 @@ class PeerModelingService:
         await self._ensure_pair(bank_id, observer_peer_id, target_peer_id)
         for draft in (payload.claims if payload else []):
             self._validate_draft_shape(draft)
+            if draft.source_kind != PeerSourceKind.MEMORY_UNIT:
+                raise PeerValidationError("Modeling claims require memory_unit evidence; use corrections for manual claims")
             if draft.source_kind == PeerSourceKind.MEMORY_UNIT:
                 await self._validate_memory_sources(bank_id, draft.source_ids)
 
@@ -277,33 +338,45 @@ class PeerModelingService:
         for claim in active_claims:
             if supersede_claim_type == claim.claim_type and not claim.locked:
                 continue
-            card_entry = PeerCardEntry(
-                claim_id=claim.id,
-                claim_type=claim.claim_type,
-                text=claim.text,
-                confidence=claim.confidence,
-                locked=claim.locked,
-            )
-            card_candidates.append(card_entry)
+            if claim.locked or claim.confidence >= 0.85:
+                card_candidates.append(
+                    PeerCardEntry(
+                        claim_id=claim.id,
+                        claim_type=claim.claim_type,
+                        text=claim.text,
+                        confidence=claim.confidence,
+                        locked=claim.locked,
+                    )
+                )
             representation_candidates.append(
                 (claim.claim_type, claim.text, claim.locked, claim.confidence, claim.id)
             )
 
         for claim in new_claims:
-            card_candidates.append(
-                PeerCardEntry(
-                    claim_id=claim.id,
-                    claim_type=claim.claim_type,
-                    text=claim.text,
-                    confidence=claim.confidence,
-                    locked=claim.locked,
+            if claim.locked or claim.confidence >= 0.85:
+                card_candidates.append(
+                    PeerCardEntry(
+                        claim_id=claim.id,
+                        claim_type=claim.claim_type,
+                        text=claim.text,
+                        confidence=claim.confidence,
+                        locked=claim.locked,
+                    )
                 )
-            )
             representation_candidates.append(
                 (claim.claim_type, claim.text, claim.locked, claim.confidence, claim.id)
             )
 
         card_candidates.sort(key=self._card_sort_key)
+        representation_candidates.sort(key=self._representation_sort_key)
+        card_candidates = list({(entry.claim_type, entry.text): entry for entry in reversed(card_candidates)}.values())
+        card_candidates.sort(key=self._card_sort_key)
+        representation_candidates = list(
+            {
+                (entry[0], entry[1]): entry
+                for entry in reversed(representation_candidates)
+            }.values()
+        )
         representation_candidates.sort(key=self._representation_sort_key)
         card_entries = card_candidates[: self.max_card_entries]
         representation = self._representation_text(representation_candidates)

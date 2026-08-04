@@ -1975,6 +1975,57 @@ class MemoryEngine(MemoryEngineInterface):
 
         logger.info(f"[REFRESH_MENTAL_MODEL_TASK] Completed for bank_id={bank_id}, mental_model_id={mental_model_id}")
 
+    async def _handle_peer_modeling(self, task_dict: dict[str, Any]) -> None:
+        """Materialize one directional peer model from validated evidence claims."""
+        from hindsight_api.models import RequestContext
+
+        from .peer_modeling.models import (
+            PeerMaterializationResult,
+            PeerModelOperationKind,
+            PeerModelRequest,
+        )
+
+        bank_id = task_dict.get("bank_id")
+        observer_peer_id = task_dict.get("observer_peer_id")
+        target_peer_id = task_dict.get("target_peer_id")
+        if not bank_id or not observer_peer_id or not target_peer_id:
+            raise ValueError("bank_id, observer_peer_id, and target_peer_id are required for peer_modeling")
+
+        operation_kind = PeerModelOperationKind(task_dict.get("operation_kind", PeerModelOperationKind.MODEL))
+        payload = PeerModelRequest(claims=task_dict.get("claims") or [])
+        internal_context = RequestContext(
+            internal=True,
+            tenant_id=task_dict.get("_tenant_id"),
+            api_key_id=task_dict.get("_api_key_id"),
+            retry_count=task_dict.get("_retry_count", 0),
+        )
+        service = await self._peer_modeling_service(bank_id, internal_context)
+        if operation_kind == PeerModelOperationKind.REBUILD:
+            model = await service.rebuild(bank_id, observer_peer_id, target_peer_id, payload)
+        else:
+            model = await service.model(bank_id, observer_peer_id, target_peer_id, payload)
+
+        outcome = PeerMaterializationResult(
+            model_id=model.id,
+            version=model.version,
+            claims_added=len(payload.claims),
+            card_entries=len(model.card.entries),
+        )
+        operation_id = task_dict.get("operation_id")
+        if operation_id:
+            backend = await self._get_backend()
+            async with acquire_with_retry(backend) as conn:
+                await conn.execute(
+                    f"""
+                    UPDATE {fq_table("async_operations")}
+                    SET result_metadata = COALESCE(result_metadata, '{{}}'::jsonb) || $2::jsonb,
+                        updated_at = NOW()
+                    WHERE operation_id = $1
+                    """,
+                    uuid.UUID(operation_id),
+                    json.dumps({"peer_model": outcome.model_dump(mode="json")}),
+                )
+
     @_bind_bank_id("task_dict", key="bank_id")
     async def execute_task(self, task_dict: dict[str, Any]):
         """
@@ -2034,6 +2085,8 @@ class MemoryEngine(MemoryEngineInterface):
                     await self._handle_graph_maintenance(task_dict)
                 elif task_type == "refresh_mental_model":
                     await self._handle_refresh_mental_model(task_dict)
+                elif task_type == "peer_modeling":
+                    await self._handle_peer_modeling(task_dict)
                 elif task_type == "webhook_delivery":
                     await self._handle_webhook_delivery(task_dict)
                 else:
@@ -3921,6 +3974,15 @@ class MemoryEngine(MemoryEngineInterface):
 
         # Same async side effects every fact insert triggers (retain or import).
         await self._submit_post_insert_maintenance(bank_id, request_context)
+        try:
+            await self._submit_auto_peer_modeling(
+                bank_id=bank_id,
+                contents=contents,
+                unit_ids=result,
+                request_context=request_context,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to submit peer-modeling task for bank {bank_id}: {e}")
 
         if return_usage:
             return result, total_usage
@@ -3956,6 +4018,102 @@ class MemoryEngine(MemoryEngineInterface):
             await self.submit_async_graph_maintenance(bank_id=bank_id, request_context=request_context)
         except Exception as e:
             logger.warning(f"Failed to submit graph maintenance task for bank {bank_id}: {e}")
+
+    async def _submit_auto_peer_modeling(
+        self,
+        *,
+        bank_id: str,
+        contents: list[RetainContentDict],
+        unit_ids: list[list[str]],
+        request_context: "RequestContext",
+    ) -> None:
+        """Queue low-confidence directional evidence after attributed retain."""
+        config = await self._config_resolver.resolve_full_config(bank_id, request_context)
+        if not config.enable_peer_modeling or not config.enable_auto_peer_modeling:
+            return
+
+        from .peer_modeling.models import PeerClaimDraft, PeerClaimType, PeerModelRequest
+
+        service = await self._peer_modeling_service(bank_id, request_context)
+        pair_sources: dict[tuple[str, str], set[str]] = {}
+        for item, item_unit_ids in zip(contents, unit_ids, strict=True):
+            peer_context_raw = item.get("peer_context") or {}
+            if not isinstance(peer_context_raw, dict):
+                continue
+            peer_context = cast(dict[str, Any], peer_context_raw)
+            if peer_context.get("modality", "actual") != "actual":
+                continue
+            observer_reference = peer_context.get("observer_peer_id")
+            if not isinstance(observer_reference, str):
+                continue
+            subject_references_raw = peer_context.get("subject_peer_ids") or []
+            participant_references_raw = peer_context.get("participant_peer_ids") or []
+            subject_references = subject_references_raw if isinstance(subject_references_raw, list) else []
+            participant_references = participant_references_raw if isinstance(participant_references_raw, list) else []
+            target_references = [
+                reference
+                for reference in [*subject_references, *participant_references]
+                if isinstance(reference, str)
+            ]
+            if not target_references:
+                continue
+            observer_id = await service.repository.resolve_peer_id(
+                bank_id=bank_id,
+                reference=observer_reference,
+            )
+            if observer_id is None:
+                continue
+            for target_reference in target_references:
+                target_id = await service.repository.resolve_peer_id(
+                    bank_id=bank_id,
+                    reference=target_reference,
+                )
+                if target_id is not None:
+                    pair_sources.setdefault((observer_id, target_id), set()).update(item_unit_ids)
+
+        minimum_sources = max(config.peer_model_min_new_facts, config.peer_model_min_pattern_sources)
+        now = datetime.now(UTC)
+        for (observer_id, target_id), source_id_set in pair_sources.items():
+            source_ids = sorted(source_id_set)
+            if len(source_ids) < minimum_sources:
+                continue
+            current_model = await service.repository.get_directional_model(
+                bank_id=bank_id,
+                observer_peer_id=observer_id,
+                target_peer_id=target_id,
+            )
+            if current_model is not None:
+                age_seconds = (now - current_model.updated_at).total_seconds()
+                if age_seconds < config.peer_model_cooldown_seconds:
+                    continue
+
+            source_texts = await service.repository.get_memory_texts(bank_id=bank_id, source_ids=source_ids)
+            claims: list[PeerClaimDraft] = []
+            estimated_tokens = 0
+            for source_id in source_ids:
+                text = source_texts.get(source_id, "").strip()
+                if not text:
+                    continue
+                text_tokens = max(1, len(text) // 4)
+                if estimated_tokens + text_tokens > config.peer_model_representation_max_tokens:
+                    break
+                estimated_tokens += text_tokens
+                claims.append(
+                    PeerClaimDraft(
+                        claim_type=PeerClaimType.ATTRIBUTE,
+                        text=text,
+                        confidence=0.55,
+                        source_ids=[source_id],
+                    )
+                )
+            if claims:
+                await self.submit_async_peer_modeling(
+                    bank_id,
+                    observer_id,
+                    target_id,
+                    PeerModelRequest(claims=claims),
+                    request_context=request_context,
+                )
 
     async def _resolve_retain_chunking_config(
         self,
@@ -14456,6 +14614,43 @@ class MemoryEngine(MemoryEngineInterface):
     ) -> "PeerCorrectionResult":
         service = await self._peer_modeling_service(bank_id, request_context)
         return await service.apply_correction(bank_id, observer_peer_id, target_peer_id, payload)
+
+    async def submit_async_peer_modeling(
+        self,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        payload: "PeerModelRequest | None" = None,
+        *,
+        request_context: "RequestContext",
+    ) -> dict[str, Any]:
+        """Validate and queue directional peer materialization."""
+        from .peer_modeling.models import PeerModelOperationKind, PeerModelRequest
+
+        request = payload or PeerModelRequest()
+        service = await self._peer_modeling_service(bank_id, request_context)
+        await service.validate_model_request(bank_id, observer_peer_id, target_peer_id, request)
+        task_payload: dict[str, Any] = {
+            "observer_peer_id": observer_peer_id,
+            "target_peer_id": target_peer_id,
+            "operation_kind": PeerModelOperationKind.MODEL.value,
+            "claims": [claim.model_dump(mode="json") for claim in request.claims],
+        }
+        if request_context.tenant_id:
+            task_payload["_tenant_id"] = request_context.tenant_id
+        if request_context.api_key_id:
+            task_payload["_api_key_id"] = request_context.api_key_id
+        return await self._submit_async_operation(
+            bank_id=bank_id,
+            operation_type="peer_modeling",
+            task_type="peer_modeling",
+            task_payload=task_payload,
+            result_metadata={
+                "observer_peer_id": observer_peer_id,
+                "target_peer_id": target_peer_id,
+            },
+            dedupe_by_bank=False,
+        )
 
     async def rebuild_peer_model(
         self,

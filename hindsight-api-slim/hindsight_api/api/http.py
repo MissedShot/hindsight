@@ -172,6 +172,7 @@ from hindsight_api.engine.peer_modeling.models import (
     PeerList,
     PeerModel,
     PeerModelRequest,
+    PeerOperation,
     PeerUpdate,
 )
 from hindsight_api.engine.providers.none_llm import LLMNotAvailableError
@@ -6317,7 +6318,8 @@ def _register_routes(app: FastAPI):
 
     @app.post(
         "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/model/{target_peer_id}",
-        response_model=PeerModel,
+        response_model=PeerOperation,
+        status_code=202,
         operation_id="model_peer",
         tags=["Peer Modeling"],
     )
@@ -6329,13 +6331,14 @@ def _register_routes(app: FastAPI):
         request_context: RequestContext = Depends(get_request_context),
     ):
         try:
-            return await app.state.memory.rebuild_peer_model(
+            result = await app.state.memory.submit_async_peer_modeling(
                 bank_id,
                 observer_peer_id,
                 target_peer_id,
                 payload,
                 request_context=request_context,
             )
+            return PeerOperation(**result)
         except (PeerFeatureDisabledError, PeerNotFoundError, PeerValidationError) as error:
             _raise_peer_http_error(error)
 

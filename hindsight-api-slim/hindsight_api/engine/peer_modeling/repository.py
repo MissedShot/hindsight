@@ -15,7 +15,7 @@ from typing import Any
 from hindsight_api.engine.db import DatabaseBackend, DatabaseConnection
 from hindsight_api.engine.schema import fq_table
 
-from .errors import PeerNotFoundError
+from .errors import PeerConflictError, PeerNotFoundError
 from .models import (
     Peer,
     PeerCardEntry,
@@ -133,6 +133,28 @@ class PeerRepository:
             )
             return self._peer_from_row(conn, row) if row else None
 
+    async def resolve_peer_id(self, *, bank_id: str, reference: str) -> str | None:
+        """Resolve either an internal UUID or a bank-scoped external_id."""
+        try:
+            internal_id = _uuid_value(reference)
+        except ValueError:
+            internal_id = None
+        async with self._backend.acquire() as conn:
+            if internal_id is not None:
+                row = await conn.fetchrow(
+                    f"SELECT id FROM {fq_table('peers')} WHERE bank_id = $1 AND (id = $2 OR external_id = $3)",
+                    bank_id,
+                    internal_id,
+                    reference,
+                )
+            else:
+                row = await conn.fetchrow(
+                    f"SELECT id FROM {fq_table('peers')} WHERE bank_id = $1 AND external_id = $2",
+                    bank_id,
+                    reference,
+                )
+            return str(row["id"]) if row else None
+
     async def update_peer(
         self,
         *,
@@ -207,6 +229,22 @@ class PeerRepository:
                     return False
         return True
 
+    async def get_memory_texts(self, *, bank_id: str, source_ids: list[str]) -> dict[str, str]:
+        """Load source text for deterministic, evidence-backed auto materialization."""
+        if not source_ids:
+            return {}
+        async with self._backend.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT id, text FROM {fq_table('memory_units')}
+                WHERE bank_id = $1
+                  AND id IN ({', '.join(f'${index + 2}' for index in range(len(source_ids)))})
+                """,
+                bank_id,
+                *[_uuid_value(source_id) for source_id in source_ids],
+            )
+        return {str(row["id"]): str(row["text"]) for row in rows}
+
     async def get_directional_model(
         self,
         *,
@@ -251,6 +289,33 @@ class PeerRepository:
         card_json = json.dumps([entry.model_dump(mode="json") for entry in plan.card_entries])
         async with self._backend.acquire() as conn:
             async with conn.transaction():
+                # Lock both peer identities in a stable order. This also serializes
+                # first-time materializations where no peer_models row exists yet.
+                await conn.fetch(
+                    f"""
+                    SELECT id FROM {fq_table('peers')}
+                    WHERE bank_id = $1 AND id IN ($2, $3)
+                    ORDER BY id FOR UPDATE
+                    """,
+                    plan.bank_id,
+                    _uuid_value(plan.observer_peer_id),
+                    _uuid_value(plan.target_peer_id),
+                )
+                current_version = await conn.fetchval(
+                    f"""
+                    SELECT version FROM {fq_table('peer_models')}
+                    WHERE bank_id = $1 AND observer_peer_id = $2 AND target_peer_id = $3
+                    FOR UPDATE
+                    """,
+                    plan.bank_id,
+                    _uuid_value(plan.observer_peer_id),
+                    _uuid_value(plan.target_peer_id),
+                )
+                expected_version = int(current_version or 0) + 1
+                if plan.version != expected_version:
+                    raise PeerConflictError(
+                        f"Peer model changed concurrently (expected version {plan.version}, current version {current_version})"
+                    )
                 await conn.execute(
                     f"""
                     INSERT INTO {fq_table('peer_models')}
