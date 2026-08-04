@@ -194,6 +194,7 @@ class PeerContext(PeerModelBase):
     target_peer_id: str
     model_id: str
     version: int
+    card: PeerCard
     representation: str
     claims: list[PeerClaim] = Field(default_factory=list)
 

@@ -381,6 +381,18 @@ if TYPE_CHECKING:
     from hindsight_api.models import RequestContext
 
     from .audit import AuditLogListResponse, AuditLogStatsResponse
+    from .peer_modeling.models import (
+        Peer,
+        PeerClaims,
+        PeerContext,
+        PeerCorrectionRequest,
+        PeerCorrectionResult,
+        PeerCreate,
+        PeerList,
+        PeerModel,
+        PeerModelRequest,
+        PeerUpdate,
+    )
     from .transfer import BankImportResult, ImportResult
 
 
@@ -14355,6 +14367,107 @@ class MemoryEngine(MemoryEngineInterface):
             result_metadata={"mental_model_id": mental_model_id, "name": mental_model["name"]},
             dedupe_by_bank=False,
         )
+
+    async def _peer_modeling_service(
+        self,
+        bank_id: str,
+        request_context: "RequestContext",
+    ):
+        """Resolve the authenticated, bank-configured peer service."""
+        await self._authenticate_tenant(request_context)
+        config = await self._config_resolver.resolve_full_config(bank_id, request_context)
+        if not config.enable_peer_modeling:
+            from .peer_modeling.errors import PeerFeatureDisabledError
+
+            raise PeerFeatureDisabledError("Peer modeling is disabled for this bank")
+        from .peer_modeling.repository import PeerRepository
+        from .peer_modeling.service import PeerModelingService
+
+        backend = await self._get_backend()
+        return PeerModelingService(PeerRepository(backend), max_card_entries=config.peer_model_max_card_entries)
+
+    async def create_peer(
+        self, bank_id: str, payload: "PeerCreate", *, request_context: "RequestContext"
+    ) -> "Peer":
+        service = await self._peer_modeling_service(bank_id, request_context)
+        return await service.create_peer(bank_id, payload)
+
+    async def list_peers(
+        self,
+        bank_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        request_context: "RequestContext",
+    ) -> "PeerList":
+        service = await self._peer_modeling_service(bank_id, request_context)
+        return await service.list_peers(bank_id, limit=limit, offset=offset)
+
+    async def get_peer(
+        self, bank_id: str, peer_id: str, *, request_context: "RequestContext"
+    ) -> "Peer | None":
+        service = await self._peer_modeling_service(bank_id, request_context)
+        return await service.get_peer(bank_id, peer_id)
+
+    async def update_peer(
+        self,
+        bank_id: str,
+        peer_id: str,
+        payload: "PeerUpdate",
+        *,
+        request_context: "RequestContext",
+    ) -> "Peer | None":
+        service = await self._peer_modeling_service(bank_id, request_context)
+        return await service.update_peer(bank_id, peer_id, payload)
+
+    async def get_peer_context(
+        self,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        *,
+        request_context: "RequestContext",
+    ) -> "PeerContext":
+        service = await self._peer_modeling_service(bank_id, request_context)
+        return await service.get_context(bank_id, observer_peer_id, target_peer_id)
+
+    async def get_peer_claims(
+        self,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        *,
+        request_context: "RequestContext",
+    ) -> "PeerClaims":
+        from .peer_modeling.models import PeerClaims
+
+        service = await self._peer_modeling_service(bank_id, request_context)
+        claims = await service.get_claims(bank_id, observer_peer_id, target_peer_id)
+        return PeerClaims(observer_peer_id=observer_peer_id, target_peer_id=target_peer_id, items=claims)
+
+    async def correct_peer_model(
+        self,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        payload: "PeerCorrectionRequest",
+        *,
+        request_context: "RequestContext",
+    ) -> "PeerCorrectionResult":
+        service = await self._peer_modeling_service(bank_id, request_context)
+        return await service.apply_correction(bank_id, observer_peer_id, target_peer_id, payload)
+
+    async def rebuild_peer_model(
+        self,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        payload: "PeerModelRequest | None" = None,
+        *,
+        request_context: "RequestContext",
+    ) -> "PeerModel":
+        service = await self._peer_modeling_service(bank_id, request_context)
+        return await service.rebuild(bank_id, observer_peer_id, target_peer_id, payload)
 
     def _raise_if_mental_model_refresh_unavailable(self) -> None:
         """Reject refresh work before callers make any dependent writes."""

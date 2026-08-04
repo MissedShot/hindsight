@@ -23,12 +23,12 @@ from .models import (
     PeerClaimOrigin,
     PeerClaimStatus,
     PeerClaimType,
+    PeerList,
     PeerMaterializationPlan,
     PeerMaterializationResult,
     PeerModel,
     PeerSource,
     PeerSourceKind,
-    PeerList,
 )
 
 
@@ -218,7 +218,6 @@ class PeerRepository:
             row = await self._model_row(conn, bank_id, observer_peer_id, target_peer_id)
             if row is None:
                 return None
-            claims = await self._claims_for_model(conn, bank_id=bank_id, model_id=str(row["id"]))
             card_entries = [PeerCardEntry.model_validate(item) for item in _json_list(conn, row["card"])]
             card = self._card_from_row(row, card_entries)
             return PeerModel(
@@ -406,7 +405,7 @@ class PeerRepository:
             ORDER BY locked DESC, created_at ASC, id ASC
             """,
             bank_id,
-            model_id,
+            _uuid_value(model_id),
         )
         claim_ids = [str(row["id"]) for row in rows]
         sources = await self._sources_for_claims(conn, bank_id=bank_id, claim_ids=claim_ids)
@@ -429,7 +428,7 @@ class PeerRepository:
             ORDER BY claim_id ASC, source_kind ASC, source_id ASC
             """,
             bank_id,
-            *claim_ids,
+            *[_uuid_value(claim_id) for claim_id in claim_ids],
         )
         sources_by_claim: defaultdict[str, list[PeerSource]] = defaultdict(list)
         for row in rows:

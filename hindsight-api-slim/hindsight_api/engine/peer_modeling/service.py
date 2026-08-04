@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterable
+
 from .errors import PeerConflictError, PeerNotFoundError, PeerValidationError
 from .models import (
     MAX_PEER_CARD_ENTRIES,
@@ -19,6 +20,7 @@ from .models import (
     PeerClaimOrigin,
     PeerClaimStatus,
     PeerClaimType,
+    PeerClaimWrite,
     PeerContext,
     PeerCorrectionRequest,
     PeerCorrectionResult,
@@ -29,10 +31,8 @@ from .models import (
     PeerModelRequest,
     PeerSourceKind,
     PeerUpdate,
-    PeerClaimWrite,
 )
 from .repository import PeerRepository
-
 
 _CLAIM_TYPE_ORDER = {
     PeerClaimType.IDENTITY: 0,
@@ -114,6 +114,7 @@ class PeerModelingService:
             target_peer_id=target_peer_id,
             model_id=model.id,
             version=model.version,
+            card=model.card,
             representation=model.representation,
             claims=claims,
         )

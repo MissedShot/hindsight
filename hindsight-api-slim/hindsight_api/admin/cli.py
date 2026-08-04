@@ -48,10 +48,15 @@ app = typer.Typer(name="hindsight-admin", help="Hindsight administrative command
 # are intentionally absent — admin backup/restore is PostgreSQL-only.
 BACKUP_TABLES = [
     "banks",
+    "peers",
+    "peer_models",
+    "peer_model_claims",
+    "peer_model_claim_sources",
     "documents",
     "entities",
     "chunks",
     "memory_units",
+    "memory_peer_roles",
     "invalidated_memory_units",
     "unit_entities",
     "entity_cooccurrences",
