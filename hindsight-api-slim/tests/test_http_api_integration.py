@@ -1144,9 +1144,11 @@ async def test_version_endpoint_returns_correct_version(api_client):
     # Verify features field structure
     features = result["features"]
     assert "observations" in features
+    assert "peer_modeling" in features
     assert "mcp" in features
     assert "worker" in features
     assert isinstance(features["observations"], bool)
+    assert isinstance(features["peer_modeling"], bool)
     assert isinstance(features["mcp"], bool)
     assert isinstance(features["worker"], bool)
     assert isinstance(features["audit_log"], bool)

@@ -3060,6 +3060,7 @@ class FeaturesInfo(BaseModel):
     """Feature flags indicating which capabilities are enabled."""
 
     observations: bool = Field(description="Whether observations (auto-consolidation) are enabled")
+    peer_modeling: bool = Field(description="Whether directional peer cards and representations are enabled")
     mcp: bool = Field(description="Whether MCP (Model Context Protocol) server is enabled")
     worker: bool = Field(description="Whether the background worker is enabled")
     bank_config_api: bool = Field(description="Whether per-bank configuration API is enabled")
@@ -3083,6 +3084,7 @@ class VersionResponse(BaseModel):
                 "api_version": "0.4.0",
                 "features": {
                     "observations": False,
+                    "peer_modeling": False,
                     "mcp": True,
                     "worker": True,
                     "bank_config_api": False,
@@ -3764,6 +3766,7 @@ def _register_routes(app: FastAPI):
             api_version=__version__,
             features=FeaturesInfo(
                 observations=config.enable_observations,
+                peer_modeling=config.enable_peer_modeling,
                 mcp=config.mcp_enabled,
                 worker=config.worker_enabled,
                 bank_config_api=config.enable_bank_config_api,
