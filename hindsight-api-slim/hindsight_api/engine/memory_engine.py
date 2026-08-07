@@ -4093,9 +4093,13 @@ class MemoryEngine(MemoryEngineInterface):
 
         from .peer_modeling.models import PeerModelRequest
 
+        # ``unit_ids`` remains in this private signature for call compatibility,
+        # but retain output IDs can differ from ``contents`` after append/delta/filter
+        # processing. Auto scheduling uses persisted role edges and source cursors,
+        # so it must not rely on positional retain-result IDs.
         service = await self._peer_modeling_service(bank_id, request_context)
-        pair_sources: dict[tuple[str, str], set[str]] = {}
-        for item, item_unit_ids in zip(contents, unit_ids, strict=True):
+        pair_keys: set[tuple[str, str]] = set()
+        for item in contents:
             peer_context_raw = item.get("peer_context") or {}
             if not isinstance(peer_context_raw, dict):
                 continue
@@ -4126,11 +4130,11 @@ class MemoryEngine(MemoryEngineInterface):
                     reference=target_reference,
                 )
                 if target_id is not None:
-                    pair_sources.setdefault((observer_id, target_id), set()).update(item_unit_ids)
+                    pair_keys.add((observer_id, target_id))
 
         minimum_sources = config.peer_model_min_new_facts
         now = datetime.now(UTC)
-        for observer_id, target_id in pair_sources:
+        for observer_id, target_id in pair_keys:
             current_model = await service.repository.get_directional_model(
                 bank_id=bank_id,
                 observer_peer_id=observer_id,
