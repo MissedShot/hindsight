@@ -16,7 +16,7 @@ from typing import Any
 from hindsight_api.engine.db import DatabaseBackend, DatabaseConnection
 from hindsight_api.engine.schema import fq_table
 
-from .errors import PeerConflictError
+from .errors import PeerConflictError, PeerValidationError
 from .models import (
     Peer,
     PeerCardEntry,
@@ -248,6 +248,48 @@ class PeerRepository:
             )
         return {str(row["id"]): str(row["text"]) for row in rows}
 
+    async def list_pair_memory_source_ids(
+        self,
+        *,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        created_before: datetime,
+        limit: int = 16,
+    ) -> list[str]:
+        """List a bounded, bank-scoped snapshot of evidence attributed to one pair."""
+        bounded_limit = min(max(1, limit), 16)
+        async with self._backend.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT memory.id
+                FROM {fq_table("memory_units")} memory
+                JOIN {fq_table("memory_peer_roles")} observer_role
+                  ON observer_role.bank_id = memory.bank_id
+                 AND observer_role.memory_unit_id = memory.id
+                 AND observer_role.peer_id = $2
+                 AND observer_role.role = 'observer'
+                 AND observer_role.modality = 'actual'
+                JOIN {fq_table("memory_peer_roles")} target_role
+                  ON target_role.bank_id = memory.bank_id
+                 AND target_role.memory_unit_id = memory.id
+                 AND target_role.peer_id = $3
+                 AND target_role.role IN ('subject', 'participant')
+                 AND target_role.modality = 'actual'
+                WHERE memory.bank_id = $1
+                  AND memory.created_at < $4
+                GROUP BY memory.id, memory.created_at
+                ORDER BY memory.created_at DESC, memory.id DESC
+                LIMIT $5
+                """,
+                bank_id,
+                _uuid_value(observer_peer_id),
+                _uuid_value(target_peer_id),
+                created_before,
+                bounded_limit,
+            )
+        return [str(row["id"]) for row in rows]
+
     async def get_pending_memory_sources(
         self,
         *,
@@ -355,6 +397,37 @@ class PeerRepository:
             _uuid_value(source_cursor_id),
         )
 
+    async def list_directional_models(self, *, bank_id: str) -> list[PeerModel]:
+        """List already-materialized directional models for one bank."""
+        async with self._backend.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT id, bank_id, observer_peer_id, target_peer_id, version, card,
+                       representation, created_at, updated_at
+                FROM {fq_table("peer_models")}
+                WHERE bank_id = $1
+                ORDER BY observer_peer_id ASC, target_peer_id ASC
+                """,
+                bank_id,
+            )
+            models: list[PeerModel] = []
+            for row in rows:
+                card_entries = [PeerCardEntry.model_validate(item) for item in _json_list(conn, row["card"])]
+                models.append(
+                    PeerModel(
+                        id=str(row["id"]),
+                        bank_id=str(row["bank_id"]),
+                        observer_peer_id=str(row["observer_peer_id"]),
+                        target_peer_id=str(row["target_peer_id"]),
+                        version=int(row["version"]),
+                        card=self._card_from_row(row, card_entries),
+                        representation=str(row["representation"] or ""),
+                        created_at=row["created_at"],
+                        updated_at=row["updated_at"],
+                    )
+                )
+            return models
+
     async def get_directional_model(
         self,
         *,
@@ -393,7 +466,41 @@ class PeerRepository:
                 return None
             return await self._claims_for_model(conn, bank_id=bank_id, model_id=str(row["id"]))
 
-    async def apply_materialization(self, plan: PeerMaterializationPlan) -> PeerMaterializationResult:
+    async def validate_pair_memory_sources(
+        self,
+        *,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        source_ids: list[str],
+    ) -> None:
+        """Transactionally validate every memory source used by a pair projection."""
+        async with self._backend.acquire() as conn:
+            async with conn.transaction():
+                await conn.fetch(
+                    f"""
+                    SELECT id FROM {fq_table("peers")}
+                    WHERE bank_id = $1 AND id IN ($2, $3)
+                    ORDER BY id FOR UPDATE
+                    """,
+                    bank_id,
+                    _uuid_value(observer_peer_id),
+                    _uuid_value(target_peer_id),
+                )
+                await self._validate_pair_memory_sources(
+                    conn,
+                    bank_id=bank_id,
+                    observer_peer_id=observer_peer_id,
+                    target_peer_id=target_peer_id,
+                    source_ids=source_ids,
+                )
+
+    async def apply_materialization(
+        self,
+        plan: PeerMaterializationPlan,
+        *,
+        pair_source_ids: list[str] | None = None,
+    ) -> PeerMaterializationResult:
         """Apply claims, source links, card, and representation in one transaction."""
         claims_added = 0
         card_json = json.dumps([entry.model_dump(mode="json") for entry in plan.card_entries])
@@ -411,6 +518,14 @@ class PeerRepository:
                     _uuid_value(plan.observer_peer_id),
                     _uuid_value(plan.target_peer_id),
                 )
+                if pair_source_ids is not None:
+                    await self._validate_pair_memory_sources(
+                        conn,
+                        bank_id=plan.bank_id,
+                        observer_peer_id=plan.observer_peer_id,
+                        target_peer_id=plan.target_peer_id,
+                        source_ids=pair_source_ids,
+                    )
                 current_version = await conn.fetchval(
                     f"""
                     SELECT version FROM {fq_table("peer_models")}
@@ -493,22 +608,23 @@ class PeerRepository:
                         _uuid_value(claim_id),
                     )
                 for claim in plan.claims:
-                    existing_id = None
-                    if claim.origin == PeerClaimOrigin.DERIVED:
-                        existing_id = await conn.fetchval(
-                            f"""
-                            SELECT id FROM {fq_table("peer_model_claims")}
-                            WHERE bank_id = $1 AND model_id = $2 AND claim_type = $3
-                              AND text = $4 AND origin = $5 AND status = 'active'
-                            """,
-                            plan.bank_id,
-                            _uuid_value(plan.model_id),
-                            claim.claim_type.value,
-                            claim.text,
-                            claim.origin.value,
-                        )
-                    claim_id = str(existing_id) if existing_id else claim.id
-                    if existing_id is None:
+                    # Claim identity is resolved by PeerModelingService while it
+                    # builds the plan. Do not repair a transient card/source ID
+                    # after the fact by matching claim text here: that leaves the
+                    # plan internally inconsistent. The lookup below only
+                    # confirms that a plan's canonical ID is already persisted.
+                    persisted_id = await conn.fetchval(
+                        f"""
+                        SELECT id FROM {fq_table("peer_model_claims")}
+                        WHERE bank_id = $1 AND model_id = $2 AND id = $3
+                          AND status = 'active'
+                        """,
+                        plan.bank_id,
+                        _uuid_value(plan.model_id),
+                        _uuid_value(claim.id),
+                    )
+                    claim_id = str(persisted_id) if persisted_id else claim.id
+                    if persisted_id is None:
                         await conn.execute(
                             f"""
                             INSERT INTO {fq_table("peer_model_claims")}
@@ -530,18 +646,31 @@ class PeerRepository:
                             claim.provenance,
                         )
                         claims_added += 1
+                    else:
+                        await conn.execute(
+                            f"""
+                            UPDATE {fq_table("peer_model_claims")}
+                            SET confidence = GREATEST(confidence, $4), updated_at = NOW()
+                            WHERE bank_id = $1 AND model_id = $2 AND id = $3
+                              AND status = 'active' AND locked = FALSE AND origin = 'derived'
+                            """,
+                            plan.bank_id,
+                            _uuid_value(plan.model_id),
+                            _uuid_value(claim_id),
+                            claim.confidence,
+                        )
                     for source_id in claim.source_ids:
                         await conn.execute(
                             f"""
                             INSERT INTO {fq_table("peer_model_claim_sources")}
                                 (bank_id, claim_id, source_kind, source_id)
-                            VALUES ($1, $2, $3, $4)
+                            VALUES ($1, $2, $3, SUBSTR($4, 2))
                             ON CONFLICT (bank_id, claim_id, source_kind, source_id) DO NOTHING
                             """,
                             plan.bank_id,
                             _uuid_value(claim_id),
                             claim.source_kind.value,
-                            source_id,
+                            f"~{source_id}",
                         )
         return PeerMaterializationResult(
             model_id=plan.model_id,
@@ -567,6 +696,81 @@ class PeerRepository:
                 return None
             sources = await self._sources_for_claims(conn, bank_id=bank_id, claim_ids=[claim_id])
             return self._claim_from_row(row, sources.get(claim_id, []))
+
+    async def _validate_pair_memory_sources(
+        self,
+        conn: DatabaseConnection,
+        *,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        source_ids: list[str],
+    ) -> None:
+        """Lock and revalidate an explicit pair projection source set."""
+        source_ids = sorted(set(source_ids))
+        if not source_ids:
+            return
+        try:
+            source_values = [_uuid_value(source_id) for source_id in source_ids]
+        except ValueError as exc:
+            raise PeerValidationError("Every memory_unit source must be a valid memory id") from exc
+
+        source_placeholders = ", ".join(f"${index + 2}" for index in range(len(source_values)))
+        memory_rows = await conn.fetch(
+            f"""
+            SELECT id
+            FROM {fq_table("memory_units")}
+            WHERE bank_id = $1 AND id IN ({source_placeholders})
+            ORDER BY id
+            FOR UPDATE
+            """,
+            bank_id,
+            *source_values,
+        )
+        found_memory_ids = {str(row["id"]) for row in memory_rows}
+        if found_memory_ids != set(source_ids):
+            raise PeerValidationError("A memory_unit source is missing from the bank")
+
+        role_placeholders = ", ".join(f"${index + 3}" for index in range(len(source_values)))
+        observer_rows = await conn.fetch(
+            f"""
+            SELECT memory_unit_id
+            FROM {fq_table("memory_peer_roles")}
+            WHERE bank_id = $1
+              AND peer_id = $2
+              AND role = 'observer'
+              AND modality = 'actual'
+              AND memory_unit_id IN ({role_placeholders})
+            ORDER BY memory_unit_id
+            FOR UPDATE
+            """,
+            bank_id,
+            _uuid_value(observer_peer_id),
+            *source_values,
+        )
+        found_observer_ids = {str(row["memory_unit_id"]) for row in observer_rows}
+        if found_observer_ids != set(source_ids):
+            raise PeerValidationError("A memory_unit source is not attributed to the observer pair role")
+
+        target_rows = await conn.fetch(
+            f"""
+            SELECT memory_unit_id
+            FROM {fq_table("memory_peer_roles")}
+            WHERE bank_id = $1
+              AND peer_id = $2
+              AND role IN ('subject', 'participant')
+              AND modality = 'actual'
+              AND memory_unit_id IN ({role_placeholders})
+            ORDER BY memory_unit_id
+            FOR UPDATE
+            """,
+            bank_id,
+            _uuid_value(target_peer_id),
+            *source_values,
+        )
+        found_target_ids = {str(row["memory_unit_id"]) for row in target_rows}
+        if found_target_ids != set(source_ids):
+            raise PeerValidationError("A memory_unit source is not attributed to the target pair role")
 
     async def _model_row(
         self,

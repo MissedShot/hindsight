@@ -2079,6 +2079,40 @@ class MemoryEngine(MemoryEngineInterface):
             operation_id=task_dict.get("operation_id"),
         )
 
+    async def _handle_peer_model_refresh(self, task_dict: dict[str, Any]) -> dict[str, Any]:
+        """Refresh every existing directional peer model sequentially."""
+        from hindsight_api.models import RequestContext
+
+        from .peer_modeling.refresh import refresh_existing_peer_models
+
+        bank_id = task_dict.get("bank_id")
+        if not bank_id:
+            raise ValueError("bank_id is required for peer_model_refresh task")
+        internal_context = RequestContext(
+            internal=True,
+            tenant_id=task_dict.get("_tenant_id"),
+            api_key_id=task_dict.get("_api_key_id"),
+            retry_count=task_dict.get("_retry_count", 0),
+        )
+        operation_id = task_dict.get("operation_id")
+        try:
+            result = await refresh_existing_peer_models(
+                memory_engine=self,
+                bank_id=bank_id,
+                request_context=internal_context,
+                operation_id=operation_id,
+            )
+        except Exception as exc:
+            await self._write_peer_refresh_metadata(
+                operation_id,
+                {"status": "failed", "error": type(exc).__name__},
+            )
+            raise
+
+        payload = result.model_dump(mode="json")
+        await self._write_peer_refresh_metadata(operation_id, {"status": "completed", **payload})
+        return payload
+
     @_bind_bank_id("task_dict", key="bank_id")
     async def execute_task(self, task_dict: dict[str, Any]):
         """
@@ -2142,6 +2176,8 @@ class MemoryEngine(MemoryEngineInterface):
                     await self._handle_peer_modeling(task_dict)
                 elif task_type == "peer_bootstrap":
                     await self._handle_peer_bootstrap(task_dict)
+                elif task_type == "peer_model_refresh":
+                    await self._handle_peer_model_refresh(task_dict)
                 elif task_type == "webhook_delivery":
                     await self._handle_webhook_delivery(task_dict)
                 else:
@@ -2750,6 +2786,26 @@ class MemoryEngine(MemoryEngineInterface):
             # Best-effort, but log loudly: a missing write regresses clients to
             # fetch-and-measure health checks (the pre-#2605 behaviour).
             logger.warning(f"Failed to write refresh outcome metadata for {operation_id}: {e}")
+
+    async def _write_peer_refresh_metadata(self, operation_id: str | None, payload: dict[str, Any]) -> None:
+        """Merge the typed peer-refresh outcome into async-operation metadata."""
+        if not operation_id:
+            return
+        try:
+            backend = await self._get_backend()
+            async with acquire_with_retry(backend) as conn:
+                await conn.execute(
+                    f"""
+                    UPDATE {fq_table("async_operations")}
+                    SET result_metadata = COALESCE(result_metadata, '{{}}'::jsonb) || $2::jsonb,
+                        updated_at = NOW()
+                    WHERE operation_id = $1
+                    """,
+                    uuid.UUID(operation_id),
+                    json.dumps({"peer_refresh": payload}),
+                )
+        except Exception as exc:
+            logger.warning("Failed to write peer refresh metadata for %s: %s", operation_id, exc)
 
     async def _mark_operation_completed_and_fire_webhook(
         self,
@@ -13022,6 +13078,35 @@ class MemoryEngine(MemoryEngineInterface):
             "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
         }
 
+    async def _latest_operation_attempt(
+        self,
+        bank_id: str,
+        *,
+        task_type: str,
+        request_context: "RequestContext",
+    ) -> datetime | None:
+        """Return the latest effective attempt timestamp for one bank/task.
+
+        This is intentionally separate from :meth:`list_operations`: the
+        scheduler only needs one aggregate value, and the listing endpoint's
+        created-time ordering can hide an older row whose ``updated_at`` was
+        advanced by a retry. ``operation_type`` is the database column used by
+        the public ``task_type`` filter. No status predicate is applied because
+        every attempt state contributes to the cooldown.
+        """
+        await self._authenticate_tenant(request_context)
+        backend = await self._get_backend()
+        async with acquire_with_retry(backend) as conn:
+            return await conn.fetchval(
+                f"""
+                SELECT MAX(COALESCE(updated_at, created_at))
+                FROM {fq_table("async_operations")}
+                WHERE bank_id = $1 AND operation_type = $2
+                """,
+                bank_id,
+                task_type,
+            )
+
     async def list_operations(
         self,
         bank_id: str,
@@ -14794,6 +14879,34 @@ class MemoryEngine(MemoryEngineInterface):
                     "status": "pending",
                     "queued_at": datetime.now(UTC).isoformat(),
                 }
+            },
+            dedupe_by_bank=True,
+            dedupe_processing=True,
+        )
+
+    async def submit_async_peer_model_refresh(
+        self,
+        bank_id: str,
+        *,
+        request_context: "RequestContext",
+    ) -> dict[str, Any]:
+        """Queue one bank-level refresh of all existing directional peer models."""
+        await self._authenticate_tenant(request_context)
+        task_payload: dict[str, Any] = {}
+        tenant_id = getattr(request_context, "tenant_id", None)
+        api_key_id = getattr(request_context, "api_key_id", None)
+        if tenant_id:
+            task_payload["_tenant_id"] = tenant_id
+        if api_key_id:
+            task_payload["_api_key_id"] = api_key_id
+        return await self._submit_async_operation(
+            bank_id=bank_id,
+            operation_type="peer_model_refresh",
+            task_type="peer_model_refresh",
+            task_payload=task_payload,
+            result_metadata={
+                "peer_refresh": {"status": "pending"},
+                "progress": {"stage": "queued", "processed": 0, "total": None},
             },
             dedupe_by_bank=True,
             dedupe_processing=True,

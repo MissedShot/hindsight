@@ -700,6 +700,8 @@ ENV_OPERATION_CLEANUP_BATCH_SIZE = "HINDSIGHT_API_OPERATION_CLEANUP_BATCH_SIZE"
 WORKER_SLOT_TYPE_DEFAULTS: dict[str, int] = {
     "consolidation": 2,
     "peer_modeling": 0,
+    "peer_bootstrap": 0,
+    "peer_model_refresh": 0,
     "retain": 0,
     "file_convert_retain": 0,
     "refresh_mental_model": 0,
@@ -2607,9 +2609,7 @@ class HindsightConfig:
             if value < 1:
                 raise ValueError(f"{env_name} must be >= 1, got {value}")
         if self.peer_model_cooldown_seconds < 0:
-            raise ValueError(
-                f"{ENV_PEER_MODEL_COOLDOWN_SECONDS} must be >= 0, got {self.peer_model_cooldown_seconds}"
-            )
+            raise ValueError(f"{ENV_PEER_MODEL_COOLDOWN_SECONDS} must be >= 0, got {self.peer_model_cooldown_seconds}")
 
     @classmethod
     def from_env(cls) -> "HindsightConfig":
@@ -3282,9 +3282,7 @@ class HindsightConfig:
             ),
             observation_scope_limits=json.loads(os.getenv(ENV_OBSERVATION_SCOPE_LIMITS, "null"))
             or DEFAULT_OBSERVATION_SCOPE_LIMITS,
-            enable_peer_modeling=os.getenv(
-                ENV_ENABLE_PEER_MODELING, str(DEFAULT_ENABLE_PEER_MODELING)
-            ).lower()
+            enable_peer_modeling=os.getenv(ENV_ENABLE_PEER_MODELING, str(DEFAULT_ENABLE_PEER_MODELING)).lower()
             == "true",
             enable_auto_peer_modeling=os.getenv(
                 ENV_ENABLE_AUTO_PEER_MODELING, str(DEFAULT_ENABLE_AUTO_PEER_MODELING)

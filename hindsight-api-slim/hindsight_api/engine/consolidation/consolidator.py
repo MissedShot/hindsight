@@ -23,7 +23,7 @@ import uuid
 from collections import defaultdict
 from contextlib import AsyncExitStack
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from fnmatch import fnmatchcase
 from itertools import combinations
 from typing import TYPE_CHECKING, Any, Literal
@@ -1411,9 +1411,84 @@ async def _run_consolidation_job(
         )
         stats["mental_models_refreshed"] = mental_models_refreshed
 
+        # Peer refresh is a bank-level follow-up. It is deliberately submitted
+        # only from this final-round branch: a capped consolidation round must
+        # re-queue consolidation before any full-card refresh can run.
+        try:
+            await _trigger_peer_model_refreshes(
+                memory_engine=memory_engine,
+                bank_id=bank_id,
+                request_context=request_context,
+                new_facts=max(0, stats["memories_processed"] - stats["memories_failed"]),
+                final_round=True,
+                perf=perf,
+            )
+        except Exception as exc:
+            # Derived peer refresh is best effort and must not turn a completed
+            # consolidation into a retry solely because its follow-up submit
+            # encountered a transient failure.
+            logger.warning("[CONSOLIDATION] Failed to schedule peer refresh for bank %s: %s", bank_id, exc)
+
     perf.flush()
 
     return {"status": "completed", "bank_id": bank_id, **stats}
+
+
+async def _trigger_peer_model_refreshes(
+    memory_engine: "MemoryEngine",
+    bank_id: str,
+    request_context: "RequestContext",
+    new_facts: int,
+    final_round: bool,
+    now: datetime | None = None,
+    perf: ConsolidationPerfLog | None = None,
+) -> bool:
+    """Submit one bank-level refresh when final-round peer cards are stale."""
+    if not final_round:
+        return False
+
+    config = await memory_engine._config_resolver.resolve_full_config(bank_id, request_context)
+    if not config.enable_peer_modeling or not config.enable_auto_peer_modeling:
+        return False
+    if new_facts < config.peer_model_min_new_facts:
+        return False
+
+    service = await memory_engine._peer_modeling_service(bank_id, request_context)
+    models = await service.repository.list_directional_models(bank_id=bank_id)
+    if not models:
+        return False
+
+    current_time = now or datetime.now(UTC)
+    cooldown = timedelta(seconds=config.peer_model_cooldown_seconds)
+    cutoff = current_time - cooldown
+    stale_models = [model for model in models if model.updated_at <= cutoff]
+    if not stale_models:
+        return False
+
+    # A failed refresh does not update peer_models.updated_at. Include the
+    # latest submission/attempt from the bank-scoped operation table so
+    # terminal and active refreshes share the same cooldown anchor.
+    latest_operation_attempt = await memory_engine._latest_operation_attempt(
+        bank_id,
+        task_type="peer_model_refresh",
+        request_context=request_context,
+    )
+
+    latest_model_update = max(model.updated_at for model in stale_models)
+    cooldown_anchor = max(latest_model_update, latest_operation_attempt or latest_model_update)
+    if cooldown_anchor > cutoff:
+        return False
+
+    result = await memory_engine.submit_async_peer_model_refresh(
+        bank_id=bank_id,
+        request_context=request_context,
+    )
+    if perf:
+        if result.get("deduplicated"):
+            perf.log(f"[PEER_REFRESH] Existing refresh already active for bank {bank_id}")
+        else:
+            perf.log(f"[PEER_REFRESH] Queued bank-level refresh for bank {bank_id}")
+    return not result.get("deduplicated", False)
 
 
 async def _trigger_mental_model_refreshes(
