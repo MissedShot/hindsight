@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from hindsight_api.api.http import OperationProgress, OperationResponse, OperationStatusResponse
 from hindsight_api.engine.consolidation.consolidator import _trigger_peer_model_refreshes
 from hindsight_api.engine.memory_engine import MemoryEngine
 from hindsight_api.engine.peer_modeling.refresh import PeerRefreshPairOutcome, PeerRefreshResult
@@ -352,18 +353,46 @@ async def test_submit_refresh_uses_active_bank_dedupe() -> None:
     result = await MemoryEngine.submit_async_peer_model_refresh(engine, "bank", request_context=object())
 
     assert result == {"operation_id": "existing-refresh", "deduplicated": True}
-    engine._submit_async_operation.assert_awaited_once_with(
-        bank_id="bank",
-        operation_type="peer_model_refresh",
-        task_type="peer_model_refresh",
-        task_payload={},
-        result_metadata={
-            "peer_refresh": {"status": "pending"},
-            "progress": {"stage": "queued", "processed": 0, "total": None},
-        },
-        dedupe_by_bank=True,
-        dedupe_processing=True,
+    engine._submit_async_operation.assert_awaited_once()
+    assert engine._submit_async_operation.await_args is not None
+    submit_kwargs = engine._submit_async_operation.await_args.kwargs
+    assert submit_kwargs["bank_id"] == "bank"
+    assert submit_kwargs["operation_type"] == "peer_model_refresh"
+    assert submit_kwargs["task_type"] == "peer_model_refresh"
+    assert submit_kwargs["task_payload"] == {}
+    assert submit_kwargs["dedupe_by_bank"] is True
+    assert submit_kwargs["dedupe_processing"] is True
+
+    queued_progress = submit_kwargs["result_metadata"]["progress"]
+    progress = OperationProgress.model_validate(queued_progress)
+    assert progress.stage == "queued"
+    assert progress.processed == 0
+    assert progress.total is None
+    assert datetime.fromisoformat(progress.at).tzinfo == UTC
+
+    operation = OperationResponse.model_validate(
+        {
+            "id": "existing-refresh",
+            "task_type": "peer_model_refresh",
+            "items_count": 0,
+            "created_at": progress.at,
+            "status": "pending",
+            "error_message": None,
+            "progress": queued_progress,
+        }
     )
+    status = OperationStatusResponse.model_validate(
+        {
+            "operation_id": "existing-refresh",
+            "status": "pending",
+            "operation_type": "peer_model_refresh",
+            "created_at": progress.at,
+            "updated_at": progress.at,
+            "progress": queued_progress,
+        }
+    )
+    assert operation.progress == progress
+    assert status.progress == progress
 
 
 @pytest.mark.asyncio

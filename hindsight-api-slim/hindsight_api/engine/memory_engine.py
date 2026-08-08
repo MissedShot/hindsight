@@ -14899,6 +14899,7 @@ class MemoryEngine(MemoryEngineInterface):
             task_payload["_tenant_id"] = tenant_id
         if api_key_id:
             task_payload["_api_key_id"] = api_key_id
+        queued_at = datetime.now(UTC).isoformat()
         return await self._submit_async_operation(
             bank_id=bank_id,
             operation_type="peer_model_refresh",
@@ -14906,7 +14907,7 @@ class MemoryEngine(MemoryEngineInterface):
             task_payload=task_payload,
             result_metadata={
                 "peer_refresh": {"status": "pending"},
-                "progress": {"stage": "queued", "processed": 0, "total": None},
+                "progress": {"stage": "queued", "at": queued_at, "processed": 0, "total": None},
             },
             dedupe_by_bank=True,
             dedupe_processing=True,
