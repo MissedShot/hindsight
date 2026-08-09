@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import re
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -10,8 +11,14 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import Field
 
-from .bootstrap import distill_directional_claims
-from .models import PeerClaimDraft, PeerModelBase, PeerModelRequest, PeerSourceKind
+from .bootstrap import distill_directional_claim_delta
+from .models import (
+    PeerClaimDelta,
+    PeerClaimDraft,
+    PeerModelBase,
+    PeerModelRequest,
+    PeerSourceKind,
+)
 
 if TYPE_CHECKING:
     from hindsight_api.engine.memory_engine import MemoryEngine
@@ -44,24 +51,28 @@ class PeerRefreshPairOutcome(PeerModelBase):
 
     observer_peer_id: str
     target_peer_id: str
-    status: Literal["refreshed", "failed"]
+    status: Literal["refreshed", "unchanged", "failed"]
     version_before: int
     version_after: int | None = None
     claims_materialized: int = 0
+    cursor_advanced: bool = False
+    has_more: bool = False
     error: str | None = None
 
 
 class PeerRefreshResult(PeerModelBase):
     """Typed outcomes for every existing directional model considered."""
 
+    status: Literal["completed", "partial", "failed", "unchanged"] = "unchanged"
     pairs: list[PeerRefreshPairOutcome] = Field(default_factory=list)
 
 
-Distiller = Callable[..., Awaitable[list[PeerClaimDraft]]]
+Distiller = Callable[..., Awaitable[PeerClaimDelta]]
+LegacyDistiller = Callable[..., Awaitable[list[PeerClaimDraft]]]
 
 
 class _SnapshotRepository:
-    """Read-only evidence view handed to the default distiller."""
+    """Read-only evidence view handed to injected distillers."""
 
     def __init__(self, source_ids: tuple[str, ...], source_texts: dict[str, str]) -> None:
         self._source_ids = source_ids
@@ -74,7 +85,7 @@ class _SnapshotRepository:
 
 
 class _SnapshotService:
-    """Tiny service facade preventing the distiller from reaching mutable rows."""
+    """Tiny service facade preventing injected distillers from mutable-row reads."""
 
     def __init__(self, repository: _SnapshotRepository) -> None:
         self.repository = repository
@@ -85,10 +96,9 @@ def _validated_claims(
     *,
     source_ids: tuple[str, ...],
 ) -> list[PeerClaimDraft]:
-    """Reject any distiller output that escapes the pair's role-scoped source pool."""
-    if not isinstance(claims, list) or not claims:
-        raise ValueError("distiller returned no claims")
-
+    """Reject distiller output outside the immutable new/current source pool."""
+    if not isinstance(claims, list):
+        raise ValueError("distiller returned an invalid claim list")
     allowed_source_ids = set(source_ids)
     validated: list[PeerClaimDraft] = []
     for claim in claims:
@@ -97,7 +107,7 @@ def _validated_claims(
         if claim.source_kind != PeerSourceKind.MEMORY_UNIT:
             raise ValueError("distiller returned a non-memory claim")
         if not claim.source_ids or any(source_id not in allowed_source_ids for source_id in claim.source_ids):
-            raise ValueError("distiller returned a source outside the pair source pool")
+            raise ValueError("distiller returned a source outside the refresh source pool")
         if _is_prompt_control_payload(claim.text):
             raise ValueError("distiller returned a prompt-control claim")
         text = claim.text.strip()
@@ -113,25 +123,39 @@ def _is_prompt_control_payload(text: str) -> bool:
     return bool(_PROMPT_CONTROL_PAYLOAD.match(normalized))
 
 
+def _result_status(outcomes: list[PeerRefreshPairOutcome]) -> Literal["completed", "partial", "failed", "unchanged"]:
+    """Classify orchestration truthfully, including bounded follow-up windows."""
+    if not outcomes:
+        return "unchanged"
+    failures = sum(outcome.status == "failed" for outcome in outcomes)
+    if failures == len(outcomes):
+        return "failed"
+    if failures or any(outcome.has_more and outcome.status != "failed" for outcome in outcomes):
+        return "partial"
+    if all(outcome.status == "unchanged" for outcome in outcomes):
+        return "unchanged"
+    return "completed"
+
+
 async def refresh_existing_peer_models(
     *,
     memory_engine: "MemoryEngine",
     bank_id: str,
     request_context: "RequestContext",
     snapshot_at: datetime | None = None,
-    distill_async: Distiller | None = None,
+    distill_async: Distiller | LegacyDistiller | None = None,
     operation_id: str | None = None,
 ) -> PeerRefreshResult:
-    """Refresh existing directional models sequentially from bounded pair evidence."""
+    """Refresh each existing model from one bounded immutable bootstrap window."""
     service = await memory_engine._peer_modeling_service(bank_id, request_context)
     repository = service.repository
     models = await repository.list_directional_models(bank_id=bank_id)
     if not models:
         await memory_engine._write_operation_progress(operation_id, stage="completed", processed=0, total=0)
-        return PeerRefreshResult()
+        return PeerRefreshResult(status="unchanged")
 
     snapshot = snapshot_at or datetime.now(UTC)
-    distiller = distill_async or distill_directional_claims
+    distiller = distill_async or distill_directional_claim_delta
     total_models = len(models)
     await memory_engine._write_operation_progress(operation_id, stage="refreshing", processed=0, total=total_models)
     outcomes: list[PeerRefreshPairOutcome] = []
@@ -142,61 +166,122 @@ async def refresh_existing_peer_models(
             if observer is None or target is None:
                 raise ValueError("directional model references a missing peer")
 
-            source_ids = await repository.list_pair_memory_source_ids(
+            cursor = model.source_cursor or model.updated_at
+            window = await repository.list_bootstrap_memory_window(
                 bank_id=bank_id,
                 observer_peer_id=model.observer_peer_id,
                 target_peer_id=model.target_peer_id,
-                created_before=snapshot,
+                after_cursor=cursor,
+                after_cursor_id=model.source_cursor_id,
+                snapshot_at=snapshot,
                 limit=_REFRESH_SOURCE_LIMIT,
             )
-            if not source_ids:
-                raise ValueError("pair has no memory-unit evidence")
-            source_pool = tuple(source_ids[:_REFRESH_SOURCE_LIMIT])
-            source_texts = await repository.get_memory_texts(bank_id=bank_id, source_ids=list(source_pool))
+            if not window.sources:
+                await repository.validate_model_memory_sources(
+                    bank_id=bank_id,
+                    model_id=model.id,
+                    new_source_ids=[],
+                    expected_source_versions={},
+                )
+                outcomes.append(
+                    PeerRefreshPairOutcome(
+                        observer_peer_id=model.observer_peer_id,
+                        target_peer_id=model.target_peer_id,
+                        status="unchanged",
+                        version_before=model.version,
+                        version_after=model.version,
+                    )
+                )
+                continue
+
+            source_texts: dict[str, str] = {}
             total_source_text_length = 0
-            for source_id in source_pool:
-                source_text = source_texts.get(source_id)
-                if not isinstance(source_text, str) or not source_text.strip():
+            for source in window.sources:
+                if not source.text.strip():
                     raise ValueError("pair source text is missing or empty")
-                if len(source_text) > _REFRESH_SOURCE_TEXT_LIMIT:
+                if len(source.text) > _REFRESH_SOURCE_TEXT_LIMIT:
                     raise ValueError("pair source text exceeds the refresh bound")
-                total_source_text_length += len(source_text)
+                total_source_text_length += len(source.text)
+                source_texts[source.id] = source.text
             if total_source_text_length > _REFRESH_TOTAL_TEXT_LIMIT:
                 raise ValueError("pair source text exceeds the total refresh bound")
 
-            snapshot_service = _SnapshotService(
-                _SnapshotRepository(
-                    source_pool,
-                    {source_id: source_texts[source_id] for source_id in source_pool},
+            all_current_claims = [
+                claim
+                for claim in (
+                    await repository.get_directional_claims(
+                        bank_id=bank_id,
+                        observer_peer_id=model.observer_peer_id,
+                        target_peer_id=model.target_peer_id,
+                    )
+                    or []
                 )
+                if claim.status.value == "active"
+            ]
+            current_claims = all_current_claims[:64]
+            # Keep the semantic-delta prompt and its server-derived old-source
+            # allowlist bounded even when a legacy model accumulated many links.
+            current_claims = [claim.model_copy(update={"sources": claim.sources[:16]}) for claim in current_claims]
+            current_source_ids = [
+                source.source_id
+                for claim in all_current_claims
+                for source in claim.sources
+                if source.source_kind == PeerSourceKind.MEMORY_UNIT
+            ]
+            source_pool = tuple(dict.fromkeys([*(source.id for source in window.sources), *current_source_ids]))
+            expected_source_versions = {source.id: source.updated_at for source in window.sources}
+            snapshot_service = _SnapshotService(
+                _SnapshotRepository(tuple(source.id for source in window.sources), source_texts)
             )
-            claims = _validated_claims(
-                await distiller(
-                    memory_engine=memory_engine,
-                    service=snapshot_service,
-                    bank_id=bank_id,
-                    observer=observer,
-                    target=target,
-                    source_ids=list(source_pool),
-                    request_context=request_context,
-                ),
-                source_ids=source_pool,
-            )
+            distiller_kwargs: dict[str, Any] = {
+                "memory_engine": memory_engine,
+                "service": snapshot_service,
+                "bank_id": bank_id,
+                "observer": observer,
+                "target": target,
+                "source_ids": [source.id for source in window.sources],
+                "source_rows": list(window.sources),
+                "current_claims": current_claims,
+                "request_context": request_context,
+            }
+            try:
+                signature = inspect.signature(distiller)
+            except (TypeError, ValueError):
+                signature = None
+            if signature is not None and not any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()
+            ):
+                distiller_kwargs = {
+                    name: value for name, value in distiller_kwargs.items() if name in signature.parameters
+                }
+            raw_delta = await distiller(**distiller_kwargs)
+            delta = raw_delta if isinstance(raw_delta, PeerClaimDelta) else PeerClaimDelta(claims=raw_delta)
+            claims = _validated_claims(delta.claims, source_ids=source_pool)
+            if window.next_cursor is None or window.next_cursor_id is None:
+                raise ValueError("refresh window did not return a composite checkpoint")
             updated = await service.model(
                 bank_id,
                 model.observer_peer_id,
                 model.target_peer_id,
                 PeerModelRequest(claims=claims),
-                validate_pair_sources=True,
+                source_cursor=window.next_cursor,
+                source_cursor_id=window.next_cursor_id,
+                validate_bank_sources=[source.id for source in window.sources],
+                expected_source_versions=expected_source_versions,
+                supersede_claim_ids=delta.supersede_claim_ids,
+                validate_existing_sources=True,
             )
+            changed = updated.version != model.version
             outcomes.append(
                 PeerRefreshPairOutcome(
                     observer_peer_id=model.observer_peer_id,
                     target_peer_id=model.target_peer_id,
-                    status="refreshed",
+                    status="refreshed" if changed else "unchanged",
                     version_before=model.version,
                     version_after=updated.version,
                     claims_materialized=len(claims),
+                    cursor_advanced=True,
+                    has_more=window.has_more,
                 )
             )
         except Exception as exc:
@@ -210,13 +295,14 @@ async def refresh_existing_peer_models(
                 )
             )
         finally:
+            has_pending_window = any(outcome.has_more and outcome.status != "failed" for outcome in outcomes)
             await memory_engine._write_operation_progress(
                 operation_id,
-                stage="completed" if processed_models == total_models else "refreshing",
+                stage=("completed" if processed_models == total_models and not has_pending_window else "refreshing"),
                 processed=processed_models,
                 total=total_models,
             )
-    return PeerRefreshResult(pairs=outcomes)
+    return PeerRefreshResult(status=_result_status(outcomes), pairs=outcomes)
 
 
 __all__ = ["PeerRefreshPairOutcome", "PeerRefreshResult", "refresh_existing_peer_models"]

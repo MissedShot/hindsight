@@ -8,7 +8,7 @@ repository transaction without changing the public storage or response models.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -268,11 +268,23 @@ class PeerModelingService:
         source_cursor: datetime | None = None,
         source_cursor_id: str | None = None,
         validate_pair_sources: bool = False,
+        validate_bank_sources: list[str] | None = None,
+        expected_source_versions: Mapping[str, datetime] | None = None,
+        supersede_claim_ids: list[str] | None = None,
+        validate_existing_sources: bool = False,
     ) -> PeerModel:
         """Materialize supplied evidence claims through the worker-safe domain path."""
         await self.validate_model_request(bank_id, observer_peer_id, target_peer_id, payload)
         state = await self._load_model_and_claims(bank_id, observer_peer_id, target_peer_id)
         model, claims = state.model, state.claims
+        supersede_ids = list(dict.fromkeys(supersede_claim_ids or []))
+        active_claims_by_id = {claim.id: claim for claim in claims if claim.status == PeerClaimStatus.ACTIVE}
+        for claim_id in supersede_ids:
+            claim = active_claims_by_id.get(claim_id)
+            if claim is None or claim.origin != PeerClaimOrigin.DERIVED or claim.locked:
+                raise PeerValidationError(
+                    "Incremental refresh may supersede only active, unlocked derived claims from this pair"
+                )
         existing_derived = self._canonical_derived_claims(claims)
         new_claims: list[PeerClaimWrite] = []
         for draft in payload.claims if payload else []:
@@ -306,11 +318,12 @@ class PeerModelingService:
             model=model,
             claims=claims,
             new_claims=new_claims,
-            supersede_claim_ids=[],
+            supersede_claim_ids=supersede_ids,
             source_cursor=source_cursor,
             source_cursor_id=source_cursor_id,
         )
         pair_source_ids = self._pair_memory_source_ids(claims, plan) if validate_pair_sources else None
+        bank_source_ids = list(dict.fromkeys(validate_bank_sources or []))
         if model is not None and not self._plan_needs_apply(plan, model, claims):
             if pair_source_ids is not None:
                 await self.repository.validate_pair_memory_sources(
@@ -319,27 +332,131 @@ class PeerModelingService:
                     target_peer_id=target_peer_id,
                     source_ids=pair_source_ids,
                 )
-            if source_cursor is not None and source_cursor_id is not None:
-                await self.repository.advance_source_cursor(
+            if bank_source_ids and source_cursor is not None and source_cursor_id is not None:
+                if validate_existing_sources:
+                    await self.repository.advance_source_cursor(
+                        bank_id=bank_id,
+                        observer_peer_id=observer_peer_id,
+                        target_peer_id=target_peer_id,
+                        source_cursor=source_cursor,
+                        source_cursor_id=source_cursor_id,
+                        bank_source_ids=bank_source_ids,
+                        expected_source_versions=expected_source_versions,
+                        model_id=model.id,
+                        validate_existing_sources=True,
+                    )
+                else:
+                    await self.repository.advance_source_cursor(
+                        bank_id=bank_id,
+                        observer_peer_id=observer_peer_id,
+                        target_peer_id=target_peer_id,
+                        source_cursor=source_cursor,
+                        source_cursor_id=source_cursor_id,
+                        bank_source_ids=bank_source_ids,
+                        expected_source_versions=expected_source_versions,
+                    )
+            elif bank_source_ids:
+                if validate_existing_sources:
+                    await self.repository.validate_model_memory_sources(
+                        bank_id=bank_id,
+                        model_id=model.id,
+                        new_source_ids=bank_source_ids,
+                        expected_source_versions=expected_source_versions,
+                    )
+                else:
+                    await self.repository.validate_bank_memory_sources(
+                        bank_id=bank_id,
+                        source_ids=bank_source_ids,
+                        expected_source_versions=expected_source_versions,
+                    )
+            elif source_cursor is not None and source_cursor_id is not None:
+                if validate_existing_sources:
+                    await self.repository.advance_source_cursor(
+                        bank_id=bank_id,
+                        observer_peer_id=observer_peer_id,
+                        target_peer_id=target_peer_id,
+                        source_cursor=source_cursor,
+                        source_cursor_id=source_cursor_id,
+                        model_id=model.id,
+                        validate_existing_sources=True,
+                    )
+                else:
+                    await self.repository.advance_source_cursor(
+                        bank_id=bank_id,
+                        observer_peer_id=observer_peer_id,
+                        target_peer_id=target_peer_id,
+                        source_cursor=source_cursor,
+                        source_cursor_id=source_cursor_id,
+                    )
+            elif validate_existing_sources:
+                await self.repository.validate_model_memory_sources(
                     bank_id=bank_id,
-                    observer_peer_id=observer_peer_id,
-                    target_peer_id=target_peer_id,
-                    source_cursor=source_cursor,
-                    source_cursor_id=source_cursor_id,
+                    model_id=model.id,
+                    new_source_ids=[],
+                    expected_source_versions={},
                 )
             return model
         if pair_source_ids is not None:
-            await self.repository.apply_materialization(plan, pair_source_ids=pair_source_ids)
+            if bank_source_ids:
+                await self.repository.apply_materialization(
+                    plan,
+                    pair_source_ids=pair_source_ids,
+                    bank_source_ids=bank_source_ids,
+                    expected_source_versions=expected_source_versions,
+                    validate_existing_sources=validate_existing_sources,
+                )
+            else:
+                await self.repository.apply_materialization(
+                    plan,
+                    pair_source_ids=pair_source_ids,
+                    validate_existing_sources=validate_existing_sources,
+                )
+        elif bank_source_ids:
+            await self.repository.apply_materialization(
+                plan,
+                bank_source_ids=bank_source_ids,
+                expected_source_versions=expected_source_versions,
+                validate_existing_sources=validate_existing_sources,
+            )
         else:
-            await self.repository.apply_materialization(plan)
-        materialized = await self.repository.get_directional_model(
-            bank_id=bank_id,
-            observer_peer_id=observer_peer_id,
-            target_peer_id=target_peer_id,
-        )
+            await self.repository.apply_materialization(
+                plan,
+                validate_existing_sources=validate_existing_sources,
+            )
+        try:
+            materialized = await self.repository.get_directional_model(
+                bank_id=bank_id,
+                observer_peer_id=observer_peer_id,
+                target_peer_id=target_peer_id,
+            )
+        except Exception:
+            if model is None:
+                raise
+            return self._planned_existing_model(model, plan)
         if materialized is None:
+            if model is not None:
+                return self._planned_existing_model(model, plan)
             raise PeerNotFoundError("Peer model was not materialized")
         return materialized
+
+    @staticmethod
+    def _planned_existing_model(model: PeerModel, plan: PeerMaterializationPlan) -> PeerModel:
+        """Reflect a committed existing-model plan when post-commit readback is unavailable."""
+        card = model.card.model_copy(
+            update={
+                "entries": plan.card_entries,
+                "version": plan.version,
+            }
+        )
+        return model.model_copy(
+            update={
+                "version": plan.version,
+                "card": card,
+                "representation": plan.representation,
+                "source_cursor": plan.source_cursor or model.source_cursor,
+                "source_cursor_id": plan.source_cursor_id or model.source_cursor_id,
+            }
+        )
 
     @staticmethod
     def _normalize_claim_text(text: str) -> str:

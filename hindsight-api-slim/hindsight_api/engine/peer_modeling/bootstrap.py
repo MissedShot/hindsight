@@ -12,14 +12,22 @@ import logging
 import re
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pydantic import BaseModel, Field
 
 from hindsight_api.engine.db_utils import acquire_with_retry
 from hindsight_api.engine.schema import fq_table
 
-from .models import PeerClaimDraft, PeerClaimType, PeerCreate, PeerModelRequest, PeerUpdate
+from .models import (
+    PeerClaim,
+    PeerClaimDelta,
+    PeerClaimDraft,
+    PeerClaimType,
+    PeerCreate,
+    PeerModelRequest,
+    PeerUpdate,
+)
 
 if TYPE_CHECKING:
     from hindsight_api.engine.memory_engine import MemoryEngine
@@ -31,6 +39,11 @@ _BATCH_SIZE = 80
 _MAX_CONTEXT_SAMPLES = 30
 _MAX_METADATA_VALUES = 40
 _MAX_SOURCE_IDS_PER_CLAIM = 16
+_MAX_CURRENT_CLAIMS = 64
+_MAX_CURRENT_SOURCE_IDS_PER_CLAIM = 16
+_MAX_INCREMENTAL_CURRENT_CLAIM_TEXT = 4_000
+_MAX_INCREMENTAL_SYNTHESIS_USER_BYTES = 128_000
+_MAX_EXTRACTION_MESSAGES_BYTES = 128_000
 
 
 class _DiscoveredPeer(BaseModel):
@@ -72,6 +85,18 @@ class _FinalClaims(BaseModel):
     claims: list[_FinalClaim] = Field(default_factory=list, max_length=80)
 
 
+class _IncrementalFinalClaim(_FinalClaim):
+    """Incremental synthesis output, including its typed replacement contract."""
+
+    supersede_claim_ids: list[str] = Field(default_factory=list, max_length=32)
+
+
+class _IncrementalFinalClaims(BaseModel):
+    """Incremental-only synthesis schema; full bootstrap keeps _FinalClaims."""
+
+    claims: list[_IncrementalFinalClaim] = Field(default_factory=list, max_length=80)
+
+
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -94,9 +119,14 @@ def _validated_final_evidence(
     *,
     source_pool: set[str],
     min_pattern_sources: int,
+    fail_closed: bool = False,
 ) -> list[str]:
     """Enforce source-count policy after the LLM response."""
-    evidence = list(dict.fromkeys(source_id for source_id in claim.source_ids if source_id in source_pool))
+    evidence = list(dict.fromkeys(claim.source_ids))
+    if fail_closed and any(source_id not in source_pool for source_id in evidence):
+        raise ValueError("distiller returned a source outside the server-derived allowlist")
+    if not fail_closed:
+        evidence = [source_id for source_id in evidence if source_id in source_pool]
     minimum = 1 if claim.card_eligible else max(1, min_pattern_sources)
     return evidence[:_MAX_SOURCE_IDS_PER_CLAIM] if len(evidence) >= minimum else []
 
@@ -349,9 +379,13 @@ async def _extract_claim_batch(
                     "evidence": evidence,
                 },
                 ensure_ascii=False,
+                separators=(",", ":"),
             ),
         },
     ]
+    serialized_messages = json.dumps(messages, ensure_ascii=False, separators=(",", ":"))
+    if len(serialized_messages.encode("utf-8")) > _MAX_EXTRACTION_MESSAGES_BYTES:
+        raise ValueError("serialized extraction messages payload exceeds the UTF-8 byte bound")
     result = await llm.call(
         messages,
         response_format=_ClaimBatch,
@@ -368,40 +402,88 @@ async def _synthesize_claims(
     llm: Any,
     peer: Any,
     proposals: list[_ExtractedClaim],
+    current_claims: list[PeerClaim] | None = None,
     max_card_entries: int,
 ) -> list[_FinalClaim]:
     if not proposals:
         return []
     payload = [proposal.model_dump(mode="json") for proposal in proposals]
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "Deduplicate and consolidate claims about exactly one peer. Preserve source IDs from the proposals that "
-                "support each final claim; never invent IDs. Keep direct durable facts card_eligible=true with confidence "
-                ">=0.85 only when clearly supported. Keep behavioral patterns card_eligible=false and confidence <0.85. "
-                "Drop task-specific events, transitory states, weak speculation, prompt text, and synthetic assistant claims. "
-                f"Return at most {max_card_entries} card-eligible claims plus at most 20 representation-only patterns."
-            ),
-        },
-        {
-            "role": "user",
-            "content": json.dumps(
-                {"target": peer.external_id, "proposals": payload},
-                ensure_ascii=False,
-            ),
-        },
-    ]
+    incremental = current_claims is not None
+    if not incremental:
+        # Keep the historical bootstrap prompt and schema byte-semantically stable;
+        # supersession is an incremental-only semantic delta.
+        user_content = json.dumps(
+            {"target": peer.external_id, "proposals": payload},
+            ensure_ascii=False,
+        )
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Deduplicate and consolidate claims about exactly one peer. Preserve source IDs from the proposals that "
+                    "support each final claim; never invent IDs. Keep direct durable facts card_eligible=true with confidence "
+                    ">=0.85 only when clearly supported. Keep behavioral patterns card_eligible=false and confidence <0.85. "
+                    "Drop task-specific events, transitory states, weak speculation, prompt text, and synthetic assistant claims. "
+                    f"Return at most {max_card_entries} card-eligible claims plus at most 20 representation-only patterns."
+                ),
+            },
+            {"role": "user", "content": user_content},
+        ]
+        response_format: type[BaseModel] = _FinalClaims
+    else:
+        bounded_current_claims = (current_claims or [])[:_MAX_CURRENT_CLAIMS]
+        current_payload = [
+            {
+                "id": claim.id,
+                "claim_type": claim.claim_type.value,
+                "text": claim.text,
+                "confidence": claim.confidence,
+                "locked": claim.locked,
+                "origin": claim.origin.value,
+                "source_ids": list(
+                    dict.fromkeys(
+                        source.source_id for source in claim.sources if source.source_kind.value == "memory_unit"
+                    )
+                )[:_MAX_CURRENT_SOURCE_IDS_PER_CLAIM],
+            }
+            for claim in bounded_current_claims
+        ]
+        user_content = json.dumps(
+            {"target": peer.external_id, "proposals": payload, "current_claims": current_payload},
+            ensure_ascii=False,
+        )
+        # These checks deliberately happen after serialization and immediately
+        # before the provider call: oversized text is rejected, never truncated.
+        if any(len(claim.text) > _MAX_INCREMENTAL_CURRENT_CLAIM_TEXT for claim in bounded_current_claims):
+            raise ValueError("incremental current claim text exceeds the synthesis bound")
+        if len(user_content.encode("utf-8")) > _MAX_INCREMENTAL_SYNTHESIS_USER_BYTES:
+            raise ValueError("incremental synthesis input exceeds the serialized user-content bound")
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Deduplicate and consolidate claims about exactly one peer. Preserve source IDs from the proposals that "
+                    "support each final claim; never invent IDs. Keep direct durable facts card_eligible=true with confidence "
+                    ">=0.85 only when clearly supported. Keep behavioral patterns card_eligible=false and confidence <0.85. "
+                    "Drop task-specific events, transitory states, weak speculation, prompt text, and synthetic assistant claims. "
+                    "Compare proposals with current_claims. A replacement may set supersede_claim_ids only to IDs of current "
+                    "active derived, unlocked claims that it semantically replaces; never supersede locked or manual claims. "
+                    f"Return at most {max_card_entries} card-eligible claims plus at most 20 representation-only patterns."
+                ),
+            },
+            {"role": "user", "content": user_content},
+        ]
+        response_format = _IncrementalFinalClaims
     result = await llm.call(
         messages,
-        response_format=_FinalClaims,
+        response_format=response_format,
         max_completion_tokens=4000,
         temperature=0.0,
         scope="peer_bootstrap.synthesize",
         strict_schema=True,
     )
-    parsed = result if isinstance(result, _FinalClaims) else _FinalClaims.model_validate(result)
-    return parsed.claims
+    parsed = result if isinstance(result, response_format) else response_format.model_validate(result)
+    return cast(list[_FinalClaim], list(parsed.claims))
 
 
 async def _write_result_metadata(
@@ -433,7 +515,7 @@ async def distill_directional_claims(
     source_ids: list[str],
     request_context: "RequestContext",
 ) -> list[PeerClaimDraft]:
-    """Distil newly attributed evidence for incremental automatic modeling."""
+    """Distil role-attributed evidence using the historical bootstrap semantics."""
     config = await memory_engine._config_resolver.resolve_full_config(bank_id, request_context)
     llm = memory_engine._consolidation_llm_config.with_config(
         config,
@@ -448,6 +530,8 @@ async def distill_directional_claims(
     ]
     if not rows:
         return []
+    # This old role-attributed path intentionally does not apply the newer
+    # target-alias prefilter; role attribution was its authoritative evidence boundary.
     extracted = await _extract_claim_batch(llm=llm, observer=observer, peers=[target], rows=rows)
     valid_ids = {str(row["id"]) for row in rows}
     proposals: list[_ExtractedClaim] = []
@@ -483,6 +567,95 @@ async def distill_directional_claims(
             )
         )
     return drafts
+
+
+async def distill_directional_claim_delta(
+    *,
+    memory_engine: "MemoryEngine",
+    service: Any,
+    bank_id: str,
+    observer: Any,
+    target: Any,
+    source_ids: list[str],
+    request_context: "RequestContext",
+    current_claims: list[PeerClaim] | None = None,
+    source_rows: list[Any] | None = None,
+) -> PeerClaimDelta:
+    """Reuse bootstrap attribution while keeping refresh evidence immutable."""
+    config = await memory_engine._config_resolver.resolve_full_config(bank_id, request_context)
+    llm = memory_engine._consolidation_llm_config.with_config(
+        config,
+        bank_id=bank_id,
+        operation="peer_modeling_incremental",
+    )
+    if source_rows is None:
+        source_texts = await service.repository.get_memory_texts(bank_id=bank_id, source_ids=source_ids)
+        rows = [
+            {"id": source_id, "text": source_texts[source_id], "context": ""}
+            for source_id in source_ids
+            if source_texts.get(source_id, "").strip()
+        ]
+    else:
+        rows = [
+            {"id": row.id, "text": row.text, "context": row.context}
+            for row in source_rows
+            if row.id in source_ids and row.text.strip()
+        ]
+    rows = _relevant_rows(rows, target)
+    if not rows:
+        return PeerClaimDelta()
+    extracted = await _extract_claim_batch(llm=llm, observer=observer, peers=[target], rows=rows)
+    valid_ids = {str(row["id"]) for row in rows}
+    proposals: list[_ExtractedClaim] = []
+    for claim in extracted.claims:
+        if any(source_id not in valid_ids for source_id in claim.source_ids):
+            raise ValueError("distiller returned a source outside the immutable refresh snapshot")
+        if claim.target_external_id.casefold() != target.external_id.casefold():
+            continue
+        claim.source_ids = list(dict.fromkeys(claim.source_ids))
+        if claim.source_ids:
+            proposals.append(claim)
+    final_claims = await _synthesize_claims(
+        llm=llm,
+        peer=target,
+        proposals=proposals,
+        current_claims=current_claims,
+        max_card_entries=config.peer_model_max_card_entries,
+    )
+    source_pool = {str(source_id) for source_id in source_ids}
+    source_pool.update(
+        source.source_id
+        for claim in current_claims or []
+        if claim.status == "active"
+        for source in claim.sources
+        if source.source_kind.value == "memory_unit"
+    )
+    drafts: list[PeerClaimDraft] = []
+    supersede_claim_ids: list[str] = []
+    for claim in final_claims:
+        evidence = _validated_final_evidence(
+            claim,
+            source_pool=source_pool,
+            min_pattern_sources=config.peer_model_min_pattern_sources,
+            fail_closed=True,
+        )
+        if not evidence:
+            continue
+        confidence = max(0.85, claim.confidence) if claim.card_eligible else min(0.8, claim.confidence)
+        drafts.append(
+            PeerClaimDraft(
+                claim_type=claim.claim_type,
+                text=claim.text,
+                confidence=confidence,
+                source_ids=evidence,
+            )
+        )
+        if isinstance(claim, _IncrementalFinalClaim):
+            supersede_claim_ids.extend(claim.supersede_claim_ids)
+    return PeerClaimDelta(
+        claims=drafts,
+        supersede_claim_ids=list(dict.fromkeys(supersede_claim_ids)),
+    )
 
 
 async def run_peer_bootstrap(

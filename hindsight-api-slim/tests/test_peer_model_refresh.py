@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from unittest.mock import AsyncMock
+from uuid import UUID
 
 import pytest
 
@@ -20,6 +21,8 @@ from hindsight_api.engine.peer_modeling.models import (
     PeerClaimWrite,
     PeerMaterializationPlan,
     PeerMaterializationResult,
+    PeerMemorySource,
+    PeerMemoryWindow,
     PeerModel,
     PeerModelRequest,
     PeerSource,
@@ -95,9 +98,11 @@ class _Repository:
             }
         )
         self.list_pair_memory_source_ids = AsyncMock(side_effect=self._list_pair_memory_source_ids)
+        self.list_bootstrap_memory_window = AsyncMock(side_effect=self._list_bootstrap_memory_window)
         self.get_memory_texts = AsyncMock(side_effect=self._get_memory_texts)
         self.get_pending_memory_sources = AsyncMock()
         self.advance_source_cursor = AsyncMock()
+        self.validate_model_memory_sources = AsyncMock()
 
     async def list_directional_models(self, *, bank_id: str) -> list[PeerModel]:
         assert bank_id == "bank"
@@ -106,6 +111,13 @@ class _Repository:
     async def get_peer(self, *, bank_id: str, peer_id: str) -> Peer | None:
         assert bank_id == "bank"
         return self.peers.get(peer_id)
+
+    async def get_directional_claims(
+        self, *, bank_id: str, observer_peer_id: str, target_peer_id: str
+    ) -> list[PeerClaim]:
+        assert bank_id == "bank"
+        assert (observer_peer_id, target_peer_id) in self.source_ids or not self.models
+        return []
 
     async def _list_pair_memory_source_ids(
         self,
@@ -125,6 +137,39 @@ class _Repository:
         assert bank_id == "bank"
         return {source_id: self.source_texts[source_id] for source_id in source_ids if source_id in self.source_texts}
 
+    async def _list_bootstrap_memory_window(
+        self,
+        *,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        after_cursor: datetime,
+        after_cursor_id: str | None,
+        snapshot_at: datetime,
+        limit: int,
+    ) -> PeerMemoryWindow:
+        assert bank_id == "bank"
+        assert snapshot_at == NOW
+        assert after_cursor_id is None
+        assert limit == 16
+        source_ids = self.source_ids.get((observer_peer_id, target_peer_id), [])[:16]
+        sources = [
+            PeerMemorySource(
+                id=source_id,
+                text=self.source_texts.get(source_id, ""),
+                fact_type="observation",
+                updated_at=NOW - timedelta(hours=len(source_ids) - index),
+            )
+            for index, source_id in enumerate(source_ids)
+        ]
+        last_source = sources[-1] if sources else None
+        return PeerMemoryWindow(
+            sources=sources,
+            next_cursor=last_source.updated_at if last_source else None,
+            next_cursor_id=last_source.id if last_source else None,
+            has_more=len(self.source_ids.get((observer_peer_id, target_peer_id), [])) > 16,
+        )
+
 
 class _Service:
     def __init__(self, repository: _Repository) -> None:
@@ -138,14 +183,27 @@ class _Service:
         target_peer_id: str,
         payload: PeerModelRequest,
         *,
-        validate_pair_sources: bool = False,
+        validate_bank_sources: list[str] | None = None,
+        expected_source_versions: dict[str, datetime] | None = None,
+        source_cursor: datetime | None = None,
+        source_cursor_id: str | None = None,
+        supersede_claim_ids: list[str] | None = None,
+        validate_existing_sources: bool = False,
     ) -> PeerModel:
         assert bank_id == "bank"
-        assert validate_pair_sources is True
+        assert validate_bank_sources
+        assert expected_source_versions
+        assert validate_existing_sources is True
         assert payload.claims
         for index, model in enumerate(self.repository.models):
             if model.observer_peer_id == observer_peer_id and model.target_peer_id == target_peer_id:
-                updated = model.model_copy(update={"version": model.version + 1})
+                updated = model.model_copy(
+                    update={
+                        "version": model.version + 1,
+                        "source_cursor": source_cursor,
+                        "source_cursor_id": source_cursor_id,
+                    }
+                )
                 self.repository.models[index] = updated
                 return updated
         raise AssertionError("unknown pair")
@@ -193,7 +251,7 @@ async def test_no_existing_models_is_a_noop() -> None:
     }
     distiller.assert_not_awaited()
     service.model.assert_not_awaited()
-    repository.list_pair_memory_source_ids.assert_not_awaited()
+    repository.list_bootstrap_memory_window.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -226,18 +284,18 @@ async def test_refresh_uses_one_snapshot_bounded_pool_and_distiller_call_per_pai
     assert [call.kwargs["request_context"] for call in distiller.await_args_list] == [
         call.kwargs["request_context"] for call in distiller.await_args_list
     ]
-    assert repository.list_pair_memory_source_ids.await_count == 2
-    assert [call.kwargs["created_before"] for call in repository.list_pair_memory_source_ids.await_args_list] == [
+    assert repository.list_bootstrap_memory_window.await_count == 2
+    assert [call.kwargs["snapshot_at"] for call in repository.list_bootstrap_memory_window.await_args_list] == [
         NOW,
         NOW,
     ]
-    assert [call.kwargs["limit"] for call in repository.list_pair_memory_source_ids.await_args_list] == [16, 16]
+    assert [call.kwargs["limit"] for call in repository.list_bootstrap_memory_window.await_args_list] == [16, 16]
     assert service.model.await_count == 2
     assert [(call.args[1], call.args[2]) for call in service.model.await_args_list] == [
         ("observer", "target"),
         ("observer", "observer"),
     ]
-    assert all("source_cursor" not in call.kwargs for call in service.model.await_args_list)
+    assert [call.kwargs["source_cursor_id"] for call in service.model.await_args_list] == ["a1", "b1"]
     repository.get_pending_memory_sources.assert_not_awaited()
     repository.advance_source_cursor.assert_not_awaited()
     assert [
@@ -255,7 +313,7 @@ async def test_distiller_cannot_refetch_mutable_source_text_after_bounded_snapsh
     async def mutable_get_memory_texts(*, bank_id: str, source_ids: list[str]) -> dict[str, str]:
         assert bank_id == "bank"
         assert source_ids == ["a1"]
-        value = {"a1": "first bounded text"} if not underlying_reads else {"a1": "x" * 1_000_000}
+        value = {"a1": "x" * 1_000_000}
         underlying_reads.append(value)
         return value
 
@@ -278,9 +336,9 @@ async def test_distiller_cannot_refetch_mutable_source_text_after_bounded_snapsh
         distill_async=distill_from_snapshot,
     )
 
-    assert result.pairs[0].status == "refreshed"
-    assert underlying_reads == [{"a1": "first bounded text"}, {"a1": "x" * 1_000_000}]
-    assert repository.get_memory_texts.await_count == 2
+    assert result.pairs[0].status == "refreshed", result.pairs[0].error
+    assert underlying_reads == [{"a1": "x" * 1_000_000}]
+    assert repository.get_memory_texts.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -306,7 +364,7 @@ async def test_oversized_source_text_is_rejected_before_distiller() -> None:
     assert result.pairs[0].status == "failed"
     assert result.pairs[0].error == "ValueError"
     assert repository.models[0].version == 3
-    repository.get_memory_texts.assert_awaited_once_with(bank_id="bank", source_ids=["huge"])
+    repository.get_memory_texts.assert_not_awaited()
     distiller.assert_not_awaited()
     service.model.assert_not_awaited()
 
@@ -555,8 +613,8 @@ async def test_no_pair_sources_preserves_old_card_and_skips_distiller() -> None:
         distill_async=distiller,
     )
 
-    assert result.pairs[0].status == "failed"
-    assert result.pairs[0].error == "ValueError"
+    assert result.pairs[0].status == "unchanged"
+    assert result.pairs[0].error is None
     assert repository.models[0].version == 3
     distiller.assert_not_awaited()
     service.model.assert_not_awaited()
@@ -755,7 +813,11 @@ async def test_existing_service_materialization_increments_version_and_preserves
         async def memory_sources_exist(self, **_kwargs: object) -> bool:
             return True
 
-        async def apply_materialization(self, plan: PeerMaterializationPlan) -> PeerMaterializationResult:
+        async def apply_materialization(
+            self,
+            plan: PeerMaterializationPlan,
+            **_kwargs: object,
+        ) -> PeerMaterializationResult:
             self.plan = plan
             return PeerMaterializationResult(model_id=model.id, version=4, claims_added=0, card_entries=0)
 
@@ -868,6 +930,47 @@ async def test_strict_service_materialization_passes_existing_and_new_memory_sou
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("validate_pair_sources", "validate_bank_sources"),
+    [
+        (True, [SOURCE_B]),
+        (False, [SOURCE_B]),
+        (False, None),
+    ],
+    ids=["mixed-bank-and-pair", "bank-only", "no-new-source-args"],
+)
+async def test_changed_materialization_passes_existing_source_validation_to_repository(
+    validate_pair_sources: bool,
+    validate_bank_sources: list[str] | None,
+) -> None:
+    model, claim = _uuid_model_and_claim()
+    repository = _PlanCaptureRepository(model, claim)
+    service = PeerModelingService(cast(PeerRepository, repository))
+
+    await service.model(
+        "bank",
+        OBSERVER_ID,
+        TARGET_ID,
+        PeerModelRequest(
+            claims=[
+                PeerClaimDraft(
+                    claim_type=PeerClaimType.RELATIONSHIP,
+                    text="New relationship claim",
+                    confidence=0.9,
+                    source_ids=[SOURCE_B],
+                )
+            ]
+        ),
+        validate_pair_sources=validate_pair_sources,
+        validate_bank_sources=validate_bank_sources,
+        validate_existing_sources=True,
+    )
+
+    assert repository.plan is not None
+    assert repository.validate_existing_sources is True
+
+
+@pytest.mark.asyncio
 async def test_strict_noop_revalidates_pair_sources_and_propagates_stale_failure() -> None:
     model, claim = _uuid_model_and_claim()
     model = model.model_copy(update={"representation": "ATTRIBUTE: Canonical claim"})
@@ -903,6 +1006,9 @@ class _PlanCaptureRepository:
         self.claim = claim
         self.plan: PeerMaterializationPlan | None = None
         self.validated_source_ids: list[str] | None = None
+        self.bank_source_ids: list[str] | None = None
+        self.expected_source_versions: dict[str, datetime] | None = None
+        self.validate_existing_sources: bool | None = None
         self.validation_error: Exception | None = None
 
     async def peer_pair_exists(self, **_kwargs: object) -> bool:
@@ -945,10 +1051,57 @@ class _PlanCaptureRepository:
         plan: PeerMaterializationPlan,
         *,
         pair_source_ids: list[str] | None = None,
+        bank_source_ids: list[str] | None = None,
+        expected_source_versions: dict[str, datetime] | None = None,
+        validate_existing_sources: bool = False,
     ) -> PeerMaterializationResult:
         self.plan = plan
         self.validated_source_ids = list(pair_source_ids) if pair_source_ids is not None else None
+        self.bank_source_ids = list(bank_source_ids) if bank_source_ids is not None else None
+        self.expected_source_versions = expected_source_versions
+        self.validate_existing_sources = validate_existing_sources
         return PeerMaterializationResult(model_id=plan.model_id, version=plan.version, claims_added=0, card_entries=1)
+
+
+class _CursorOnlyRepository(_PlanCaptureRepository):
+    def __init__(self, model: PeerModel, claim: PeerClaim) -> None:
+        super().__init__(model, claim)
+        self.cursor_calls: list[dict[str, object]] = []
+
+    async def advance_source_cursor(self, **kwargs: object) -> None:
+        self.cursor_calls.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_service_cursor_only_delta_uses_atomic_repository_cursor_path_without_version_bump() -> None:
+    model, claim = _uuid_model_and_claim()
+    model = model.model_copy(update={"representation": "ATTRIBUTE: Canonical claim"})
+    repository = _CursorOnlyRepository(model, claim)
+    service = PeerModelingService(cast(PeerRepository, repository))
+
+    updated = await service.model(
+        "bank",
+        OBSERVER_ID,
+        TARGET_ID,
+        PeerModelRequest(),
+        source_cursor=NOW,
+        source_cursor_id=SOURCE_B,
+        validate_bank_sources=[SOURCE_A],
+    )
+
+    assert updated.version == model.version
+    assert repository.plan is None
+    assert repository.cursor_calls == [
+        {
+            "bank_id": "bank",
+            "observer_peer_id": OBSERVER_ID,
+            "target_peer_id": TARGET_ID,
+            "source_cursor": NOW,
+            "source_cursor_id": SOURCE_B,
+            "bank_source_ids": [SOURCE_A],
+            "expected_source_versions": None,
+        }
+    ]
 
 
 class _RecordingTransaction:
@@ -979,6 +1132,7 @@ class _RecordingConnection:
         fail_on_source: bool = False,
         memory_sources: set[str] | None = None,
         attributed_sources: set[str] | None = None,
+        source_updated_at: dict[str, datetime] | None = None,
     ) -> None:
         self.state: dict[str, Any] = {
             "version": 1,
@@ -992,10 +1146,13 @@ class _RecordingConnection:
         self.fail_on_source = fail_on_source
         self.memory_sources = memory_sources
         self.attributed_sources = attributed_sources
+        self.source_updated_at = source_updated_at or {}
+        self.transaction_count = 0
         self.calls: list[tuple[str, tuple[object, ...]]] = []
         self.write_calls: list[tuple[str, tuple[object, ...]]] = []
 
     def transaction(self) -> _RecordingTransaction:
+        self.transaction_count += 1
         return _RecordingTransaction(self)
 
     async def fetch(self, query: str, *args: object) -> list[object]:
@@ -1003,7 +1160,11 @@ class _RecordingConnection:
         if "memory_units" in query:
             source_ids = [str(value) for value in args[1:]]
             allowed = self.memory_sources if self.memory_sources is not None else set(source_ids)
-            return [{"id": source_id} for source_id in source_ids if source_id in allowed]
+            return [
+                {"id": source_id, "updated_at": self.source_updated_at.get(source_id)}
+                for source_id in source_ids
+                if source_id in allowed
+            ]
         if "memory_peer_roles" in query:
             source_ids = [str(value) for value in args[2:]]
             allowed = self.attributed_sources if self.attributed_sources is not None else set(source_ids)
@@ -1026,6 +1187,8 @@ class _RecordingConnection:
             self.state["version"] = args[4]
             self.state["card"] = args[5]
             self.state["representation"] = args[6]
+        elif "SET source_cursor =" in query:
+            self.state["cursor"] = (args[3], args[4])
         elif "SET status = 'superseded'" in query:
             statuses = self.state["claim_statuses"]
             assert isinstance(statuses, dict)
@@ -1140,6 +1303,25 @@ async def test_valid_pair_source_continues_through_materialization() -> None:
 
 
 @pytest.mark.asyncio
+async def test_materialization_rejects_source_updated_after_snapshot_before_any_write() -> None:
+    connection = _RecordingConnection(
+        memory_sources={SOURCE_A},
+        source_updated_at={SOURCE_A: NOW + timedelta(seconds=1)},
+    )
+
+    with pytest.raises(PeerValidationError, match="changed after the snapshot"):
+        await PeerRepository(cast(Any, _RecordingBackend(connection))).apply_materialization(
+            _provenance_plan(),
+            bank_source_ids=[SOURCE_A],
+            expected_source_versions={SOURCE_A: NOW},
+        )
+
+    assert connection.write_calls == []
+    assert connection.state["version"] == 1
+    assert connection.state["cursor"] == ("old-time", "old-cursor-id")
+
+
+@pytest.mark.asyncio
 async def test_strict_validation_includes_existing_projected_source_and_fails_before_writes_when_old_source_missing() -> (
     None
 ):
@@ -1170,6 +1352,68 @@ async def test_public_pair_source_validation_is_transactional_and_has_no_writes(
     assert connection.write_calls == []
     assert [query for query, _args in connection.calls if "memory_units" in query]
     assert [query for query, _args in connection.calls if "memory_peer_roles" in query]
+
+
+@pytest.mark.asyncio
+async def test_incremental_cursor_only_update_validates_bank_sources_in_one_transaction() -> None:
+    connection = _RecordingConnection(memory_sources={SOURCE_A})
+
+    await PeerRepository(cast(Any, _RecordingBackend(connection))).advance_source_cursor(
+        bank_id="bank",
+        observer_peer_id=OBSERVER_ID,
+        target_peer_id=TARGET_ID,
+        source_cursor=NOW,
+        source_cursor_id=SOURCE_B,
+        bank_source_ids=[SOURCE_A],
+    )
+
+    assert connection.transaction_count == 1
+    assert connection.state["cursor"] == (NOW, UUID(SOURCE_B))
+    assert len(connection.write_calls) == 1
+    assert "SET source_cursor =" in connection.write_calls[0][0]
+    assert all("memory_peer_roles" not in query for query, _args in connection.calls)
+
+
+@pytest.mark.asyncio
+async def test_incremental_cursor_validation_failure_rolls_back_without_cursor_write() -> None:
+    connection = _RecordingConnection(memory_sources=set())
+
+    with pytest.raises(PeerValidationError, match="memory_unit source"):
+        await PeerRepository(cast(Any, _RecordingBackend(connection))).advance_source_cursor(
+            bank_id="bank",
+            observer_peer_id=OBSERVER_ID,
+            target_peer_id=TARGET_ID,
+            source_cursor=NOW,
+            source_cursor_id=SOURCE_B,
+            bank_source_ids=[SOURCE_A],
+        )
+
+    assert connection.transaction_count == 1
+    assert connection.write_calls == []
+    assert connection.state["cursor"] == ("old-time", "old-cursor-id")
+
+
+@pytest.mark.asyncio
+async def test_incremental_cursor_rejects_source_updated_after_snapshot_without_cursor_write() -> None:
+    connection = _RecordingConnection(
+        memory_sources={SOURCE_A},
+        source_updated_at={SOURCE_A: NOW + timedelta(seconds=1)},
+    )
+
+    with pytest.raises(PeerValidationError, match="changed after the snapshot"):
+        await PeerRepository(cast(Any, _RecordingBackend(connection))).advance_source_cursor(
+            bank_id="bank",
+            observer_peer_id=OBSERVER_ID,
+            target_peer_id=TARGET_ID,
+            source_cursor=NOW,
+            source_cursor_id=SOURCE_B,
+            bank_source_ids=[SOURCE_A],
+            expected_source_versions={SOURCE_A: NOW},
+        )
+
+    assert connection.transaction_count == 1
+    assert connection.write_calls == []
+    assert connection.state["cursor"] == ("old-time", "old-cursor-id")
 
 
 @pytest.mark.asyncio

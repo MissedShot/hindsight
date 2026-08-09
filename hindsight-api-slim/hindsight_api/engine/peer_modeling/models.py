@@ -116,6 +116,13 @@ class PeerClaimDraft(PeerModelBase):
     source_ids: list[str] = Field(default_factory=list, max_length=64)
 
 
+class PeerClaimDelta(PeerModelBase):
+    """Typed incremental claim result plus exact server-validated replacements."""
+
+    claims: list[PeerClaimDraft] = Field(default_factory=list, max_length=64)
+    supersede_claim_ids: list[str] = Field(default_factory=list, max_length=32)
+
+
 class PeerModelTask(PeerModelBase):
     """Serialized task payload crossing the async-operation worker boundary."""
 
@@ -211,6 +218,8 @@ class PeerModel(PeerModelBase):
     representation: str
     created_at: datetime
     updated_at: datetime
+    source_cursor: datetime | None = None
+    source_cursor_id: str | None = None
 
 
 class PeerList(PeerModelBase):
@@ -294,6 +303,25 @@ class PeerMaterializationResult(PeerModelBase):
     version: int
     claims_added: int
     card_entries: int
+
+
+class PeerMemorySource(PeerModelBase):
+    """One immutable bootstrap-corpus memory row captured for a refresh window."""
+
+    id: str
+    text: str
+    context: str = ""
+    fact_type: str
+    updated_at: datetime
+
+
+class PeerMemoryWindow(PeerModelBase):
+    """Bounded bootstrap-corpus snapshot and the last row scanned."""
+
+    sources: list[PeerMemorySource] = Field(default_factory=list)
+    next_cursor: datetime | None = None
+    next_cursor_id: str | None = None
+    has_more: bool = False
 
 
 class PeerPendingMemorySources(PeerModelBase):

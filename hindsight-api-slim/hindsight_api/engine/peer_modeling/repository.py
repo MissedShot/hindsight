@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections import defaultdict
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
@@ -27,6 +28,8 @@ from .models import (
     PeerList,
     PeerMaterializationPlan,
     PeerMaterializationResult,
+    PeerMemorySource,
+    PeerMemoryWindow,
     PeerModel,
     PeerPendingMemorySources,
     PeerSource,
@@ -248,6 +251,79 @@ class PeerRepository:
             )
         return {str(row["id"]): str(row["text"]) for row in rows}
 
+    async def list_bootstrap_memory_window(
+        self,
+        *,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        after_cursor: datetime,
+        after_cursor_id: str | None,
+        snapshot_at: datetime,
+        limit: int = 16,
+    ) -> PeerMemoryWindow:
+        """Read one immutable, pair-assigned refresh window from the bootstrap corpus.
+
+        The pair arguments deliberately do not become role-table joins: the existing
+        directional model is the assignment boundary, while bootstrap's target-bound
+        extractor decides whether this bank-level row is relevant to this target.
+        """
+        del observer_peer_id, target_peer_id
+        bounded_limit = min(max(1, limit), 16)
+        if after_cursor_id is None:
+            cursor_clause = "AND memory.updated_at >= $3"
+            parameters: list[Any] = [bank_id, snapshot_at, after_cursor, bounded_limit + 1]
+            limit_placeholder = "$4"
+        else:
+            cursor_clause = "AND (memory.updated_at > $3 OR (memory.updated_at = $3 AND memory.id > $4))"
+            parameters = [bank_id, snapshot_at, after_cursor, _uuid_value(after_cursor_id), bounded_limit + 1]
+            limit_placeholder = "$5"
+        async with self._backend.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT memory.id, memory.text, memory.context, memory.fact_type, memory.updated_at
+                FROM {fq_table("memory_units")} memory
+                WHERE memory.bank_id = $1
+                  AND memory.updated_at <= $2
+                  {cursor_clause}
+                  AND (
+                        (memory.fact_type = 'observation' AND EXISTS (
+                            SELECT 1 FROM {fq_table("memory_units")} observations
+                            WHERE observations.bank_id = memory.bank_id
+                              AND observations.fact_type = 'observation'
+                              AND observations.updated_at <= $2
+                        ))
+                     OR (memory.fact_type IN ('world', 'experience') AND NOT EXISTS (
+                            SELECT 1 FROM {fq_table("memory_units")} observations
+                            WHERE observations.bank_id = memory.bank_id
+                              AND observations.fact_type = 'observation'
+                              AND observations.updated_at <= $2
+                        ))
+                  )
+                ORDER BY memory.updated_at ASC, memory.id ASC
+                LIMIT {limit_placeholder}
+                """,
+                *parameters,
+            )
+        selected = rows[:bounded_limit]
+        sources = [
+            PeerMemorySource(
+                id=str(row["id"]),
+                text=str(row["text"] or ""),
+                context=str(row["context"] or ""),
+                fact_type=str(row["fact_type"]),
+                updated_at=row["updated_at"],
+            )
+            for row in selected
+        ]
+        last_source = sources[-1] if sources else None
+        return PeerMemoryWindow(
+            sources=sources,
+            next_cursor=last_source.updated_at if last_source else None,
+            next_cursor_id=last_source.id if last_source else None,
+            has_more=len(rows) > bounded_limit,
+        )
+
     async def list_pair_memory_source_ids(
         self,
         *,
@@ -357,17 +433,46 @@ class PeerRepository:
         target_peer_id: str,
         source_cursor: datetime,
         source_cursor_id: str,
+        bank_source_ids: list[str] | None = None,
+        expected_source_versions: Mapping[str, datetime] | None = None,
+        model_id: str | None = None,
+        validate_existing_sources: bool = False,
     ) -> None:
         """Checkpoint processed evidence without changing card version or freshness."""
         async with self._backend.acquire() as conn:
-            await self._advance_source_cursor(
-                conn,
-                bank_id=bank_id,
-                observer_peer_id=observer_peer_id,
-                target_peer_id=target_peer_id,
-                source_cursor=source_cursor,
-                source_cursor_id=source_cursor_id,
-            )
+            async with conn.transaction():
+                if validate_existing_sources:
+                    if model_id is None:
+                        raise PeerValidationError("model_id is required to validate existing memory sources")
+                    await conn.fetchrow(
+                        f"""
+                        SELECT id FROM {fq_table("peer_models")}
+                        WHERE bank_id = $1 AND id = $2
+                        FOR UPDATE
+                        """,
+                        bank_id,
+                        _uuid_value(model_id),
+                    )
+                    await self._validate_active_model_memory_sources(
+                        conn,
+                        bank_id=bank_id,
+                        model_id=model_id,
+                    )
+                if bank_source_ids is not None:
+                    await self._validate_bank_memory_sources(
+                        conn,
+                        bank_id=bank_id,
+                        source_ids=bank_source_ids,
+                        expected_source_versions=expected_source_versions,
+                    )
+                await self._advance_source_cursor(
+                    conn,
+                    bank_id=bank_id,
+                    observer_peer_id=observer_peer_id,
+                    target_peer_id=target_peer_id,
+                    source_cursor=source_cursor,
+                    source_cursor_id=source_cursor_id,
+                )
 
     async def _advance_source_cursor(
         self,
@@ -403,7 +508,7 @@ class PeerRepository:
             rows = await conn.fetch(
                 f"""
                 SELECT id, bank_id, observer_peer_id, target_peer_id, version, card,
-                       representation, created_at, updated_at
+                       representation, source_cursor, source_cursor_id, created_at, updated_at
                 FROM {fq_table("peer_models")}
                 WHERE bank_id = $1
                 ORDER BY observer_peer_id ASC, target_peer_id ASC
@@ -424,6 +529,8 @@ class PeerRepository:
                         representation=str(row["representation"] or ""),
                         created_at=row["created_at"],
                         updated_at=row["updated_at"],
+                        source_cursor=row["source_cursor"],
+                        source_cursor_id=str(row["source_cursor_id"]) if row["source_cursor_id"] is not None else None,
                     )
                 )
             return models
@@ -451,6 +558,8 @@ class PeerRepository:
                 representation=str(row["representation"] or ""),
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
+                source_cursor=row["source_cursor"],
+                source_cursor_id=str(row["source_cursor_id"]) if row["source_cursor_id"] is not None else None,
             )
 
     async def get_directional_claims(
@@ -465,6 +574,102 @@ class PeerRepository:
             if row is None:
                 return None
             return await self._claims_for_model(conn, bank_id=bank_id, model_id=str(row["id"]))
+
+    async def validate_model_memory_sources(
+        self,
+        *,
+        bank_id: str,
+        model_id: str,
+        new_source_ids: list[str],
+        expected_source_versions: Mapping[str, datetime] | None = None,
+    ) -> None:
+        """Lock/revalidate all active projection sources plus new refresh evidence."""
+        async with self._backend.acquire() as conn:
+            async with conn.transaction():
+                await conn.fetchrow(
+                    f"""
+                    SELECT id FROM {fq_table("peer_models")}
+                    WHERE bank_id = $1 AND id = $2
+                    FOR UPDATE
+                    """,
+                    bank_id,
+                    _uuid_value(model_id),
+                )
+                await self._validate_active_model_memory_sources(
+                    conn,
+                    bank_id=bank_id,
+                    model_id=model_id,
+                )
+                self._validate_expected_source_versions(
+                    new_source_ids,
+                    expected_source_versions,
+                )
+                await self._validate_bank_memory_sources(
+                    conn,
+                    bank_id=bank_id,
+                    source_ids=new_source_ids,
+                    expected_source_versions=expected_source_versions,
+                )
+
+    async def _validate_active_model_memory_sources(
+        self,
+        conn: DatabaseConnection,
+        *,
+        bank_id: str,
+        model_id: str,
+    ) -> None:
+        """Lock every active memory-unit source contributing to a model projection."""
+        memory_id_text = (
+            "memory.id::text" if getattr(conn, "backend_type", "postgresql") == "postgresql" else "TO_CHAR(memory.id)"
+        )
+        active_sources = f"""
+            SELECT DISTINCT links.source_id
+            FROM {fq_table("peer_model_claim_sources")} links
+            JOIN {fq_table("peer_model_claims")} claims
+              ON claims.bank_id = links.bank_id
+             AND claims.id = links.claim_id
+            WHERE links.bank_id = $1
+              AND claims.model_id = $2
+              AND claims.status = 'active'
+              AND links.source_kind = 'memory_unit'
+        """
+        active_rows = await conn.fetch(
+            f"""
+            WITH active_sources AS ({active_sources})
+            SELECT source_id
+            FROM active_sources
+            ORDER BY source_id
+            """,
+            bank_id,
+            _uuid_value(model_id),
+        )
+        active_source_ids = {str(row["source_id"]) for row in active_rows}
+        if not active_source_ids:
+            return
+        source_rows = await conn.fetch(
+            f"""
+            WITH active_sources AS ({active_sources})
+            SELECT memory.id
+            FROM {fq_table("memory_units")} memory
+            JOIN active_sources
+              ON {memory_id_text} = active_sources.source_id
+            WHERE memory.bank_id = $1
+            ORDER BY memory.id
+            FOR UPDATE
+            """,
+            bank_id,
+            _uuid_value(model_id),
+        )
+        if {str(row["id"]) for row in source_rows} != active_source_ids:
+            raise PeerValidationError("A memory_unit source is missing from the model projection")
+
+    @staticmethod
+    def _validate_expected_source_versions(
+        source_ids: list[str],
+        expected_source_versions: Mapping[str, datetime] | None,
+    ) -> None:
+        if set(expected_source_versions or {}) - set(source_ids):
+            raise PeerValidationError("Expected source versions must belong to the validated source set")
 
     async def validate_pair_memory_sources(
         self,
@@ -500,6 +705,9 @@ class PeerRepository:
         plan: PeerMaterializationPlan,
         *,
         pair_source_ids: list[str] | None = None,
+        bank_source_ids: list[str] | None = None,
+        expected_source_versions: Mapping[str, datetime] | None = None,
+        validate_existing_sources: bool = False,
     ) -> PeerMaterializationResult:
         """Apply claims, source links, card, and representation in one transaction."""
         claims_added = 0
@@ -518,6 +726,13 @@ class PeerRepository:
                     _uuid_value(plan.observer_peer_id),
                     _uuid_value(plan.target_peer_id),
                 )
+                if bank_source_ids is not None:
+                    await self._validate_bank_memory_sources(
+                        conn,
+                        bank_id=plan.bank_id,
+                        source_ids=bank_source_ids,
+                        expected_source_versions=expected_source_versions,
+                    )
                 if pair_source_ids is not None:
                     await self._validate_pair_memory_sources(
                         conn,
@@ -536,6 +751,12 @@ class PeerRepository:
                     _uuid_value(plan.observer_peer_id),
                     _uuid_value(plan.target_peer_id),
                 )
+                if validate_existing_sources:
+                    await self._validate_active_model_memory_sources(
+                        conn,
+                        bank_id=plan.bank_id,
+                        model_id=plan.model_id,
+                    )
                 expected_version = int(current_version or 0) + 1
                 if plan.version != expected_version:
                     raise PeerConflictError(
@@ -771,6 +992,61 @@ class PeerRepository:
         found_target_ids = {str(row["memory_unit_id"]) for row in target_rows}
         if found_target_ids != set(source_ids):
             raise PeerValidationError("A memory_unit source is not attributed to the target pair role")
+
+    async def validate_bank_memory_sources(
+        self,
+        *,
+        bank_id: str,
+        source_ids: list[str],
+        expected_source_versions: Mapping[str, datetime] | None = None,
+    ) -> None:
+        """Transactionally validate refresh evidence belongs to the bank without roles."""
+        async with self._backend.acquire() as conn:
+            async with conn.transaction():
+                await self._validate_bank_memory_sources(
+                    conn,
+                    bank_id=bank_id,
+                    source_ids=source_ids,
+                    expected_source_versions=expected_source_versions,
+                )
+
+    async def _validate_bank_memory_sources(
+        self,
+        conn: DatabaseConnection,
+        *,
+        bank_id: str,
+        source_ids: list[str],
+        expected_source_versions: Mapping[str, datetime] | None = None,
+    ) -> None:
+        source_ids = sorted(set(source_ids))
+        if not source_ids:
+            return
+        expected_versions = dict(expected_source_versions or {})
+        if set(expected_versions) - set(source_ids):
+            raise PeerValidationError("Expected source versions must belong to the validated source set")
+        try:
+            source_values = [_uuid_value(source_id) for source_id in source_ids]
+        except ValueError as exc:
+            raise PeerValidationError("Every memory_unit source must be a valid memory id") from exc
+        source_placeholders = ", ".join(f"${index + 2}" for index in range(len(source_values)))
+        rows = await conn.fetch(
+            f"""
+            SELECT id, updated_at
+            FROM {fq_table("memory_units")}
+            WHERE bank_id = $1 AND id IN ({source_placeholders})
+            ORDER BY id
+            FOR UPDATE
+            """,
+            bank_id,
+            *source_values,
+        )
+        found_sources = {str(row["id"]): row for row in rows}
+        found_source_ids = set(found_sources)
+        if found_source_ids != set(source_ids):
+            raise PeerValidationError("A memory_unit source is missing from the bank")
+        for source_id, expected_updated_at in expected_versions.items():
+            if found_sources[source_id]["updated_at"] != expected_updated_at:
+                raise PeerValidationError("A refresh memory_unit source changed after the snapshot")
 
     async def _model_row(
         self,

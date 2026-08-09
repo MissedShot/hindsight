@@ -2079,6 +2079,19 @@ class MemoryEngine(MemoryEngineInterface):
             operation_id=task_dict.get("operation_id"),
         )
 
+    @staticmethod
+    def _parse_peer_refresh_snapshot_at(value: Any) -> datetime:
+        """Parse the queue-time cutoff; retries must not silently choose a new one."""
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("snapshot_at is required for peer_model_refresh task")
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("snapshot_at must be a valid ISO-8601 datetime") from exc
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("snapshot_at must be timezone-aware")
+        return parsed.astimezone(UTC)
+
     async def _handle_peer_model_refresh(self, task_dict: dict[str, Any]) -> dict[str, Any]:
         """Refresh every existing directional peer model sequentially."""
         from hindsight_api.models import RequestContext
@@ -2088,6 +2101,7 @@ class MemoryEngine(MemoryEngineInterface):
         bank_id = task_dict.get("bank_id")
         if not bank_id:
             raise ValueError("bank_id is required for peer_model_refresh task")
+        snapshot_at = self._parse_peer_refresh_snapshot_at(task_dict.get("snapshot_at"))
         internal_context = RequestContext(
             internal=True,
             tenant_id=task_dict.get("_tenant_id"),
@@ -2100,6 +2114,7 @@ class MemoryEngine(MemoryEngineInterface):
                 memory_engine=self,
                 bank_id=bank_id,
                 request_context=internal_context,
+                snapshot_at=snapshot_at,
                 operation_id=operation_id,
             )
         except Exception as exc:
@@ -2110,7 +2125,12 @@ class MemoryEngine(MemoryEngineInterface):
             raise
 
         payload = result.model_dump(mode="json")
-        await self._write_peer_refresh_metadata(operation_id, {"status": "completed", **payload})
+        await self._write_peer_refresh_metadata(operation_id, {"status": result.status, **payload})
+        if any(pair.has_more and pair.status != "failed" for pair in result.pairs):
+            raise DeferOperation(
+                datetime.now(UTC) + timedelta(seconds=1),
+                "Peer model refresh has another source window to process",
+            )
         return payload
 
     @_bind_bank_id("task_dict", key="bank_id")
@@ -2152,6 +2172,7 @@ class MemoryEngine(MemoryEngineInterface):
                 # Continue with processing if we can't check status
 
         consolidation_result: dict | None = None
+        peer_refresh_result: dict[str, Any] | None = None
         bank_id = task_dict.get("bank_id")
         async with audit_context(
             self._audit_logger, task_type or "unknown", "system", bank_id, request=task_dict
@@ -2177,7 +2198,7 @@ class MemoryEngine(MemoryEngineInterface):
                 elif task_type == "peer_bootstrap":
                     await self._handle_peer_bootstrap(task_dict)
                 elif task_type == "peer_model_refresh":
-                    await self._handle_peer_model_refresh(task_dict)
+                    peer_refresh_result = await self._handle_peer_model_refresh(task_dict)
                 elif task_type == "webhook_delivery":
                     await self._handle_webhook_delivery(task_dict)
                 else:
@@ -2199,10 +2220,21 @@ class MemoryEngine(MemoryEngineInterface):
                             result=consolidation_result,
                             schema=schema,
                         )
+                    elif (
+                        task_type == "peer_model_refresh"
+                        and peer_refresh_result
+                        and peer_refresh_result.get("status") == "failed"
+                    ):
+                        await self._mark_operation_failed(operation_id, "Peer refresh failed", "")
                     else:
                         await self._mark_operation_completed(operation_id)
 
-                audit_entry.response = {"status": "completed", "operation_id": operation_id}
+                audit_entry.response = {
+                    "status": "failed"
+                    if peer_refresh_result and peer_refresh_result.get("status") == "failed"
+                    else "completed",
+                    "operation_id": operation_id,
+                }
 
             except ProviderRateLimitResetError as e:
                 logger.warning(f"Task deferred until provider quota resets at {e.retry_at}: {e}")
@@ -14899,14 +14931,16 @@ class MemoryEngine(MemoryEngineInterface):
             task_payload["_tenant_id"] = tenant_id
         if api_key_id:
             task_payload["_api_key_id"] = api_key_id
-        queued_at = datetime.now(UTC).isoformat()
+        snapshot_at = datetime.now(UTC).isoformat()
+        queued_at = snapshot_at
+        task_payload["snapshot_at"] = snapshot_at
         return await self._submit_async_operation(
             bank_id=bank_id,
             operation_type="peer_model_refresh",
             task_type="peer_model_refresh",
             task_payload=task_payload,
             result_metadata={
-                "peer_refresh": {"status": "pending"},
+                "peer_refresh": {"status": "pending", "snapshot_at": snapshot_at},
                 "progress": {"stage": "queued", "at": queued_at, "processed": 0, "total": None},
             },
             dedupe_by_bank=True,

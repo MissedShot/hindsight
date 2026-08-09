@@ -10,6 +10,7 @@ from hindsight_api.api.http import OperationProgress, OperationResponse, Operati
 from hindsight_api.engine.consolidation.consolidator import _trigger_peer_model_refreshes
 from hindsight_api.engine.memory_engine import MemoryEngine
 from hindsight_api.engine.peer_modeling.refresh import PeerRefreshPairOutcome, PeerRefreshResult
+from hindsight_api.worker.exceptions import DeferOperation
 
 NOW = datetime(2026, 8, 8, 12, 0, tzinfo=UTC)
 
@@ -359,7 +360,12 @@ async def test_submit_refresh_uses_active_bank_dedupe() -> None:
     assert submit_kwargs["bank_id"] == "bank"
     assert submit_kwargs["operation_type"] == "peer_model_refresh"
     assert submit_kwargs["task_type"] == "peer_model_refresh"
-    assert submit_kwargs["task_payload"] == {}
+    task_payload = submit_kwargs["task_payload"]
+    snapshot_at = task_payload["snapshot_at"]
+    parsed_snapshot_at = datetime.fromisoformat(snapshot_at)
+    assert parsed_snapshot_at.tzinfo is not None
+    assert parsed_snapshot_at.utcoffset() is not None
+    assert submit_kwargs["result_metadata"]["peer_refresh"]["snapshot_at"] == snapshot_at
     assert submit_kwargs["dedupe_by_bank"] is True
     assert submit_kwargs["dedupe_processing"] is True
 
@@ -369,6 +375,7 @@ async def test_submit_refresh_uses_active_bank_dedupe() -> None:
     assert progress.processed == 0
     assert progress.total is None
     assert datetime.fromisoformat(progress.at).tzinfo == UTC
+    assert progress.at == snapshot_at
 
     operation = OperationResponse.model_validate(
         {
@@ -397,7 +404,9 @@ async def test_submit_refresh_uses_active_bank_dedupe() -> None:
 
 @pytest.mark.asyncio
 async def test_worker_writes_result_and_pair_failure_metadata() -> None:
+    snapshot_at = NOW.isoformat()
     result = PeerRefreshResult(
+        status="failed",
         pairs=[
             PeerRefreshPairOutcome(
                 observer_peer_id="observer",
@@ -406,7 +415,7 @@ async def test_worker_writes_result_and_pair_failure_metadata() -> None:
                 version_before=3,
                 error="RuntimeError",
             )
-        ]
+        ],
     )
     engine = MemoryEngine.__new__(MemoryEngine)
     engine._write_peer_refresh_metadata = AsyncMock()
@@ -418,30 +427,122 @@ async def test_worker_writes_result_and_pair_failure_metadata() -> None:
     ):
         returned = await MemoryEngine._handle_peer_model_refresh(
             engine,
-            {"bank_id": "bank", "operation_id": "op", "_tenant_id": "tenant", "_api_key_id": "key"},
+            {
+                "bank_id": "bank",
+                "operation_id": "op",
+                "_tenant_id": "tenant",
+                "_api_key_id": "key",
+                "snapshot_at": snapshot_at,
+            },
         )
 
     assert returned == result.model_dump(mode="json")
     assert refresh.await_args is not None
     assert refresh.await_args.kwargs["operation_id"] == "op"
+    assert refresh.await_args.kwargs["snapshot_at"] == datetime.fromisoformat(snapshot_at)
     engine._write_peer_refresh_metadata.assert_awaited_once_with(
-        "op", {"status": "completed", **result.model_dump(mode="json")}
+        "op", {"status": "failed", **result.model_dump(mode="json")}
     )
 
 
 @pytest.mark.asyncio
 async def test_worker_writes_failure_metadata_before_propagating() -> None:
+    snapshot_at = NOW.isoformat()
     engine = MemoryEngine.__new__(MemoryEngine)
     engine._write_peer_refresh_metadata = AsyncMock()
+    refresh = AsyncMock(side_effect=RuntimeError("refresh failed"))
 
     with patch(
         "hindsight_api.engine.peer_modeling.refresh.refresh_existing_peer_models",
-        new=AsyncMock(side_effect=RuntimeError("refresh failed")),
+        new=refresh,
     ):
         with pytest.raises(RuntimeError, match="refresh failed"):
             await MemoryEngine._handle_peer_model_refresh(
                 engine,
-                {"bank_id": "bank", "operation_id": "op"},
+                {"bank_id": "bank", "operation_id": "op", "snapshot_at": snapshot_at},
             )
 
+    assert refresh.await_args is not None
+    assert refresh.await_args.kwargs["snapshot_at"] == datetime.fromisoformat(snapshot_at)
     engine._write_peer_refresh_metadata.assert_awaited_once_with("op", {"status": "failed", "error": "RuntimeError"})
+
+
+@pytest.mark.asyncio
+async def test_worker_defers_has_more_with_same_snapshot_until_terminal_attempt() -> None:
+    snapshot_at = NOW.isoformat()
+    has_more_result = PeerRefreshResult(
+        status="partial",
+        pairs=[
+            PeerRefreshPairOutcome(
+                observer_peer_id="observer",
+                target_peer_id="target",
+                status="refreshed",
+                version_before=3,
+                version_after=4,
+                cursor_advanced=True,
+                has_more=True,
+            )
+        ],
+    )
+    completed_result = PeerRefreshResult(
+        status="completed",
+        pairs=[
+            PeerRefreshPairOutcome(
+                observer_peer_id="observer",
+                target_peer_id="target",
+                status="unchanged",
+                version_before=4,
+                version_after=4,
+                cursor_advanced=False,
+            )
+        ],
+    )
+    engine = MemoryEngine.__new__(MemoryEngine)
+    engine._write_peer_refresh_metadata = AsyncMock()
+    refresh = AsyncMock(side_effect=[has_more_result, completed_result])
+    task = {
+        "bank_id": "bank",
+        "operation_id": "op",
+        "_tenant_id": "tenant",
+        "_api_key_id": "key",
+        "snapshot_at": snapshot_at,
+    }
+
+    with patch(
+        "hindsight_api.engine.peer_modeling.refresh.refresh_existing_peer_models",
+        new=refresh,
+    ):
+        with pytest.raises(DeferOperation):
+            await MemoryEngine._handle_peer_model_refresh(engine, dict(task))
+        returned = await MemoryEngine._handle_peer_model_refresh(engine, dict(task))
+
+    assert returned == completed_result.model_dump(mode="json")
+    assert [call.kwargs["snapshot_at"] for call in refresh.await_args_list] == [
+        datetime.fromisoformat(snapshot_at),
+        datetime.fromisoformat(snapshot_at),
+    ]
+    assert engine._write_peer_refresh_metadata.await_count == 2
+    assert engine._write_peer_refresh_metadata.await_args_list[0].args[1]["status"] == "partial"
+    assert engine._write_peer_refresh_metadata.await_args_list[1].args[1]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "snapshot_at",
+    [None, "not-an-iso-datetime", NOW.replace(tzinfo=None).isoformat()],
+)
+async def test_worker_rejects_missing_malformed_or_naive_snapshot_cutoff(snapshot_at: str | None) -> None:
+    engine = MemoryEngine.__new__(MemoryEngine)
+    refresh = AsyncMock()
+
+    with patch(
+        "hindsight_api.engine.peer_modeling.refresh.refresh_existing_peer_models",
+        new=refresh,
+    ):
+        with pytest.raises(ValueError):
+            await MemoryEngine._handle_peer_model_refresh(
+                engine,
+                {"bank_id": "bank", "operation_id": "op", "snapshot_at": snapshot_at},
+            )
+
+    refresh.assert_not_awaited()
