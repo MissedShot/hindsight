@@ -11,6 +11,9 @@ echo "Generating OpenAPI specification..."
 cd hindsight-dev
 uv run generate-openapi
 
+echo "Syncing the committed skill OpenAPI mirror..."
+cp "$ROOT_DIR/hindsight-docs/static/openapi.json" "$ROOT_DIR/skills/hindsight-docs/references/openapi.json"
+
 echo ""
 echo "Building documentation..."
 cd "$ROOT_DIR/hindsight-docs"

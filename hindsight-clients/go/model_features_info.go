@@ -23,6 +23,8 @@ var _ MappedNullable = &FeaturesInfo{}
 type FeaturesInfo struct {
 	// Whether observations (auto-consolidation) are enabled
 	Observations bool `json:"observations"`
+	// Whether directional peer cards and representations are enabled
+	PeerModeling bool `json:"peer_modeling"`
 	// Whether MCP (Model Context Protocol) server is enabled
 	Mcp bool `json:"mcp"`
 	// Whether the background worker is enabled
@@ -51,9 +53,10 @@ type _FeaturesInfo FeaturesInfo
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewFeaturesInfo(observations bool, mcp bool, worker bool, bankConfigApi bool, bankLlmHealth bool, fileUploadApi bool, documentExportApi bool, documentImportApi bool, auditLog bool, llmTrace bool, storeDocumentText bool) *FeaturesInfo {
+func NewFeaturesInfo(observations bool, peerModeling bool, mcp bool, worker bool, bankConfigApi bool, bankLlmHealth bool, fileUploadApi bool, documentExportApi bool, documentImportApi bool, auditLog bool, llmTrace bool, storeDocumentText bool) *FeaturesInfo {
 	this := FeaturesInfo{}
 	this.Observations = observations
+	this.PeerModeling = peerModeling
 	this.Mcp = mcp
 	this.Worker = worker
 	this.BankConfigApi = bankConfigApi
@@ -97,6 +100,30 @@ func (o *FeaturesInfo) GetObservationsOk() (*bool, bool) {
 // SetObservations sets field value
 func (o *FeaturesInfo) SetObservations(v bool) {
 	o.Observations = v
+}
+
+// GetPeerModeling returns the PeerModeling field value
+func (o *FeaturesInfo) GetPeerModeling() bool {
+	if o == nil {
+		var ret bool
+		return ret
+	}
+
+	return o.PeerModeling
+}
+
+// GetPeerModelingOk returns a tuple with the PeerModeling field value
+// and a boolean to check if the value has been set.
+func (o *FeaturesInfo) GetPeerModelingOk() (*bool, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.PeerModeling, true
+}
+
+// SetPeerModeling sets field value
+func (o *FeaturesInfo) SetPeerModeling(v bool) {
+	o.PeerModeling = v
 }
 
 // GetMcp returns the Mcp field value
@@ -350,6 +377,7 @@ func (o FeaturesInfo) MarshalJSON() ([]byte, error) {
 func (o FeaturesInfo) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["observations"] = o.Observations
+	toSerialize["peer_modeling"] = o.PeerModeling
 	toSerialize["mcp"] = o.Mcp
 	toSerialize["worker"] = o.Worker
 	toSerialize["bank_config_api"] = o.BankConfigApi
@@ -369,6 +397,7 @@ func (o *FeaturesInfo) UnmarshalJSON(data []byte) (err error) {
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
 		"observations",
+		"peer_modeling",
 		"mcp",
 		"worker",
 		"bank_config_api",

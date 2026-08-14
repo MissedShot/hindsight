@@ -1967,7 +1967,7 @@
     "addCorrection": "Add correction",
     "operationFeedbackTitle": "Operation submitted",
     "modelOperationFeedback": "Modeling was submitted for this observer → target pair.",
-    "rebuildOperationFeedback": "A full rebuild was submitted for this observer → target pair.",
+    "rebuildOperationFeedback": "The peer model was rebuilt for this observer → target pair.",
     "contextErrorTitle": "Unable to load directional context",
     "loadingContext": "Loading directional context...",
     "cardTitle": "Peer card",

@@ -493,6 +493,8 @@ export class HindsightClient {
       tagsMatch?: "any" | "all" | "any_strict" | "all_strict" | "exact";
       /** Compound tag filter using boolean groups. Groups are AND-ed. Mutually exclusive with tags/tagsMatch. */
       tagGroups?: Array<TagGroupLeaf | TagGroupAndInput | TagGroupOrInput | TagGroupNotInput>;
+      /** Apply every active directive regardless of tags. */
+      applyAllDirectives?: boolean;
       /** Optional JSON Schema for structured output. When provided, the response includes a 'structured_output' field. */
       responseSchema?: Record<string, unknown>;
       /** Filter which fact types are retrieved: 'world', 'experience', 'observation'. None means all. */
@@ -529,6 +531,7 @@ export class HindsightClient {
         tags: options?.tags,
         tags_match: options?.tagsMatch,
         tag_groups: options?.tagGroups,
+        apply_all_directives: options?.applyAllDirectives,
         response_schema: options?.responseSchema,
         fact_types: options?.factTypes,
         exclude_mental_models: options?.excludeMentalModels,
@@ -586,12 +589,20 @@ export class HindsightClient {
       query: { limit: options?.limit, offset: options?.offset },
       signal: options?.signal,
     });
-    return this.validateResponse(response as { data?: PeerList; error?: unknown; response?: Response }, "listPeers");
+    return this.validateResponse(
+      response as { data?: PeerList; error?: unknown; response?: Response },
+      "listPeers"
+    );
   }
 
   async createPeer(
     bankId: string,
-    peer: { external_id: string; display_name?: string; kind?: string; metadata?: Record<string, unknown> },
+    peer: {
+      external_id: string;
+      display_name?: string;
+      kind?: string;
+      metadata?: Record<string, unknown>;
+    },
     options?: { signal?: AbortSignal }
   ): Promise<Peer> {
     const response = await this.client.post({
@@ -599,7 +610,10 @@ export class HindsightClient {
       body: peer,
       signal: options?.signal,
     });
-    return this.validateResponse(response as { data?: Peer; error?: unknown; response?: Response }, "createPeer");
+    return this.validateResponse(
+      response as { data?: Peer; error?: unknown; response?: Response },
+      "createPeer"
+    );
   }
 
   async getPeer(bankId: string, peerId: string, options?: { signal?: AbortSignal }): Promise<Peer> {
@@ -607,7 +621,10 @@ export class HindsightClient {
       url: `/v1/default/banks/${encodeURIComponent(bankId)}/peers/${encodeURIComponent(peerId)}`,
       signal: options?.signal,
     });
-    return this.validateResponse(response as { data?: Peer; error?: unknown; response?: Response }, "getPeer");
+    return this.validateResponse(
+      response as { data?: Peer; error?: unknown; response?: Response },
+      "getPeer"
+    );
   }
 
   async updatePeer(
@@ -621,7 +638,10 @@ export class HindsightClient {
       body: updates,
       signal: options?.signal,
     });
-    return this.validateResponse(response as { data?: Peer; error?: unknown; response?: Response }, "updatePeer");
+    return this.validateResponse(
+      response as { data?: Peer; error?: unknown; response?: Response },
+      "updatePeer"
+    );
   }
 
   async getPeerContext(
@@ -645,14 +665,22 @@ export class HindsightClient {
     observerPeerId: string,
     targetPeerId: string,
     options?: { signal?: AbortSignal }
-  ): Promise<{ observer_peer_id: string; target_peer_id: string; items: Array<Record<string, unknown>> }> {
+  ): Promise<{
+    observer_peer_id: string;
+    target_peer_id: string;
+    items: Array<Record<string, unknown>>;
+  }> {
     const response = await this.client.get({
       url: `/v1/default/banks/${encodeURIComponent(bankId)}/peers/${encodeURIComponent(observerPeerId)}/claims/${encodeURIComponent(targetPeerId)}`,
       signal: options?.signal,
     });
     return this.validateResponse(
       response as {
-        data?: { observer_peer_id: string; target_peer_id: string; items: Array<Record<string, unknown>> };
+        data?: {
+          observer_peer_id: string;
+          target_peer_id: string;
+          items: Array<Record<string, unknown>>;
+        };
         error?: unknown;
         response?: Response;
       },

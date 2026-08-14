@@ -27,6 +27,13 @@ type BankTemplateConfig struct {
 	RetainStructuredChunkSize NullableInt32 `json:"retain_structured_chunk_size,omitempty"`
 	EnableObservations NullableBool `json:"enable_observations,omitempty"`
 	ObservationsMission NullableString `json:"observations_mission,omitempty"`
+	EnablePeerModeling NullableBool `json:"enable_peer_modeling,omitempty"`
+	EnableAutoPeerModeling NullableBool `json:"enable_auto_peer_modeling,omitempty"`
+	PeerModelMinNewFacts NullableInt32 `json:"peer_model_min_new_facts,omitempty"`
+	PeerModelCooldownSeconds NullableInt32 `json:"peer_model_cooldown_seconds,omitempty"`
+	PeerModelMaxCardEntries NullableInt32 `json:"peer_model_max_card_entries,omitempty"`
+	PeerModelMinPatternSources NullableInt32 `json:"peer_model_min_pattern_sources,omitempty"`
+	PeerModelRepresentationMaxTokens NullableInt32 `json:"peer_model_representation_max_tokens,omitempty"`
 	EnableTemporalRetrieval NullableBool `json:"enable_temporal_retrieval,omitempty"`
 	EnableGraphRetrieval NullableBool `json:"enable_graph_retrieval,omitempty"`
 	EnableReranking NullableBool `json:"enable_reranking,omitempty"`
@@ -417,6 +424,300 @@ func (o *BankTemplateConfig) SetObservationsMissionNil() {
 // UnsetObservationsMission ensures that no value is present for ObservationsMission, not even an explicit nil
 func (o *BankTemplateConfig) UnsetObservationsMission() {
 	o.ObservationsMission.Unset()
+}
+
+// GetEnablePeerModeling returns the EnablePeerModeling field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *BankTemplateConfig) GetEnablePeerModeling() bool {
+	if o == nil || IsNil(o.EnablePeerModeling.Get()) {
+		var ret bool
+		return ret
+	}
+	return *o.EnablePeerModeling.Get()
+}
+
+// GetEnablePeerModelingOk returns a tuple with the EnablePeerModeling field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *BankTemplateConfig) GetEnablePeerModelingOk() (*bool, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.EnablePeerModeling.Get(), o.EnablePeerModeling.IsSet()
+}
+
+// HasEnablePeerModeling returns a boolean if a field has been set.
+func (o *BankTemplateConfig) HasEnablePeerModeling() bool {
+	if o != nil && o.EnablePeerModeling.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetEnablePeerModeling gets a reference to the given NullableBool and assigns it to the EnablePeerModeling field.
+func (o *BankTemplateConfig) SetEnablePeerModeling(v bool) {
+	o.EnablePeerModeling.Set(&v)
+}
+// SetEnablePeerModelingNil sets the value for EnablePeerModeling to be an explicit nil
+func (o *BankTemplateConfig) SetEnablePeerModelingNil() {
+	o.EnablePeerModeling.Set(nil)
+}
+
+// UnsetEnablePeerModeling ensures that no value is present for EnablePeerModeling, not even an explicit nil
+func (o *BankTemplateConfig) UnsetEnablePeerModeling() {
+	o.EnablePeerModeling.Unset()
+}
+
+// GetEnableAutoPeerModeling returns the EnableAutoPeerModeling field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *BankTemplateConfig) GetEnableAutoPeerModeling() bool {
+	if o == nil || IsNil(o.EnableAutoPeerModeling.Get()) {
+		var ret bool
+		return ret
+	}
+	return *o.EnableAutoPeerModeling.Get()
+}
+
+// GetEnableAutoPeerModelingOk returns a tuple with the EnableAutoPeerModeling field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *BankTemplateConfig) GetEnableAutoPeerModelingOk() (*bool, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.EnableAutoPeerModeling.Get(), o.EnableAutoPeerModeling.IsSet()
+}
+
+// HasEnableAutoPeerModeling returns a boolean if a field has been set.
+func (o *BankTemplateConfig) HasEnableAutoPeerModeling() bool {
+	if o != nil && o.EnableAutoPeerModeling.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetEnableAutoPeerModeling gets a reference to the given NullableBool and assigns it to the EnableAutoPeerModeling field.
+func (o *BankTemplateConfig) SetEnableAutoPeerModeling(v bool) {
+	o.EnableAutoPeerModeling.Set(&v)
+}
+// SetEnableAutoPeerModelingNil sets the value for EnableAutoPeerModeling to be an explicit nil
+func (o *BankTemplateConfig) SetEnableAutoPeerModelingNil() {
+	o.EnableAutoPeerModeling.Set(nil)
+}
+
+// UnsetEnableAutoPeerModeling ensures that no value is present for EnableAutoPeerModeling, not even an explicit nil
+func (o *BankTemplateConfig) UnsetEnableAutoPeerModeling() {
+	o.EnableAutoPeerModeling.Unset()
+}
+
+// GetPeerModelMinNewFacts returns the PeerModelMinNewFacts field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *BankTemplateConfig) GetPeerModelMinNewFacts() int32 {
+	if o == nil || IsNil(o.PeerModelMinNewFacts.Get()) {
+		var ret int32
+		return ret
+	}
+	return *o.PeerModelMinNewFacts.Get()
+}
+
+// GetPeerModelMinNewFactsOk returns a tuple with the PeerModelMinNewFacts field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *BankTemplateConfig) GetPeerModelMinNewFactsOk() (*int32, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.PeerModelMinNewFacts.Get(), o.PeerModelMinNewFacts.IsSet()
+}
+
+// HasPeerModelMinNewFacts returns a boolean if a field has been set.
+func (o *BankTemplateConfig) HasPeerModelMinNewFacts() bool {
+	if o != nil && o.PeerModelMinNewFacts.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetPeerModelMinNewFacts gets a reference to the given NullableInt32 and assigns it to the PeerModelMinNewFacts field.
+func (o *BankTemplateConfig) SetPeerModelMinNewFacts(v int32) {
+	o.PeerModelMinNewFacts.Set(&v)
+}
+// SetPeerModelMinNewFactsNil sets the value for PeerModelMinNewFacts to be an explicit nil
+func (o *BankTemplateConfig) SetPeerModelMinNewFactsNil() {
+	o.PeerModelMinNewFacts.Set(nil)
+}
+
+// UnsetPeerModelMinNewFacts ensures that no value is present for PeerModelMinNewFacts, not even an explicit nil
+func (o *BankTemplateConfig) UnsetPeerModelMinNewFacts() {
+	o.PeerModelMinNewFacts.Unset()
+}
+
+// GetPeerModelCooldownSeconds returns the PeerModelCooldownSeconds field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *BankTemplateConfig) GetPeerModelCooldownSeconds() int32 {
+	if o == nil || IsNil(o.PeerModelCooldownSeconds.Get()) {
+		var ret int32
+		return ret
+	}
+	return *o.PeerModelCooldownSeconds.Get()
+}
+
+// GetPeerModelCooldownSecondsOk returns a tuple with the PeerModelCooldownSeconds field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *BankTemplateConfig) GetPeerModelCooldownSecondsOk() (*int32, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.PeerModelCooldownSeconds.Get(), o.PeerModelCooldownSeconds.IsSet()
+}
+
+// HasPeerModelCooldownSeconds returns a boolean if a field has been set.
+func (o *BankTemplateConfig) HasPeerModelCooldownSeconds() bool {
+	if o != nil && o.PeerModelCooldownSeconds.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetPeerModelCooldownSeconds gets a reference to the given NullableInt32 and assigns it to the PeerModelCooldownSeconds field.
+func (o *BankTemplateConfig) SetPeerModelCooldownSeconds(v int32) {
+	o.PeerModelCooldownSeconds.Set(&v)
+}
+// SetPeerModelCooldownSecondsNil sets the value for PeerModelCooldownSeconds to be an explicit nil
+func (o *BankTemplateConfig) SetPeerModelCooldownSecondsNil() {
+	o.PeerModelCooldownSeconds.Set(nil)
+}
+
+// UnsetPeerModelCooldownSeconds ensures that no value is present for PeerModelCooldownSeconds, not even an explicit nil
+func (o *BankTemplateConfig) UnsetPeerModelCooldownSeconds() {
+	o.PeerModelCooldownSeconds.Unset()
+}
+
+// GetPeerModelMaxCardEntries returns the PeerModelMaxCardEntries field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *BankTemplateConfig) GetPeerModelMaxCardEntries() int32 {
+	if o == nil || IsNil(o.PeerModelMaxCardEntries.Get()) {
+		var ret int32
+		return ret
+	}
+	return *o.PeerModelMaxCardEntries.Get()
+}
+
+// GetPeerModelMaxCardEntriesOk returns a tuple with the PeerModelMaxCardEntries field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *BankTemplateConfig) GetPeerModelMaxCardEntriesOk() (*int32, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.PeerModelMaxCardEntries.Get(), o.PeerModelMaxCardEntries.IsSet()
+}
+
+// HasPeerModelMaxCardEntries returns a boolean if a field has been set.
+func (o *BankTemplateConfig) HasPeerModelMaxCardEntries() bool {
+	if o != nil && o.PeerModelMaxCardEntries.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetPeerModelMaxCardEntries gets a reference to the given NullableInt32 and assigns it to the PeerModelMaxCardEntries field.
+func (o *BankTemplateConfig) SetPeerModelMaxCardEntries(v int32) {
+	o.PeerModelMaxCardEntries.Set(&v)
+}
+// SetPeerModelMaxCardEntriesNil sets the value for PeerModelMaxCardEntries to be an explicit nil
+func (o *BankTemplateConfig) SetPeerModelMaxCardEntriesNil() {
+	o.PeerModelMaxCardEntries.Set(nil)
+}
+
+// UnsetPeerModelMaxCardEntries ensures that no value is present for PeerModelMaxCardEntries, not even an explicit nil
+func (o *BankTemplateConfig) UnsetPeerModelMaxCardEntries() {
+	o.PeerModelMaxCardEntries.Unset()
+}
+
+// GetPeerModelMinPatternSources returns the PeerModelMinPatternSources field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *BankTemplateConfig) GetPeerModelMinPatternSources() int32 {
+	if o == nil || IsNil(o.PeerModelMinPatternSources.Get()) {
+		var ret int32
+		return ret
+	}
+	return *o.PeerModelMinPatternSources.Get()
+}
+
+// GetPeerModelMinPatternSourcesOk returns a tuple with the PeerModelMinPatternSources field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *BankTemplateConfig) GetPeerModelMinPatternSourcesOk() (*int32, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.PeerModelMinPatternSources.Get(), o.PeerModelMinPatternSources.IsSet()
+}
+
+// HasPeerModelMinPatternSources returns a boolean if a field has been set.
+func (o *BankTemplateConfig) HasPeerModelMinPatternSources() bool {
+	if o != nil && o.PeerModelMinPatternSources.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetPeerModelMinPatternSources gets a reference to the given NullableInt32 and assigns it to the PeerModelMinPatternSources field.
+func (o *BankTemplateConfig) SetPeerModelMinPatternSources(v int32) {
+	o.PeerModelMinPatternSources.Set(&v)
+}
+// SetPeerModelMinPatternSourcesNil sets the value for PeerModelMinPatternSources to be an explicit nil
+func (o *BankTemplateConfig) SetPeerModelMinPatternSourcesNil() {
+	o.PeerModelMinPatternSources.Set(nil)
+}
+
+// UnsetPeerModelMinPatternSources ensures that no value is present for PeerModelMinPatternSources, not even an explicit nil
+func (o *BankTemplateConfig) UnsetPeerModelMinPatternSources() {
+	o.PeerModelMinPatternSources.Unset()
+}
+
+// GetPeerModelRepresentationMaxTokens returns the PeerModelRepresentationMaxTokens field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *BankTemplateConfig) GetPeerModelRepresentationMaxTokens() int32 {
+	if o == nil || IsNil(o.PeerModelRepresentationMaxTokens.Get()) {
+		var ret int32
+		return ret
+	}
+	return *o.PeerModelRepresentationMaxTokens.Get()
+}
+
+// GetPeerModelRepresentationMaxTokensOk returns a tuple with the PeerModelRepresentationMaxTokens field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *BankTemplateConfig) GetPeerModelRepresentationMaxTokensOk() (*int32, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.PeerModelRepresentationMaxTokens.Get(), o.PeerModelRepresentationMaxTokens.IsSet()
+}
+
+// HasPeerModelRepresentationMaxTokens returns a boolean if a field has been set.
+func (o *BankTemplateConfig) HasPeerModelRepresentationMaxTokens() bool {
+	if o != nil && o.PeerModelRepresentationMaxTokens.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetPeerModelRepresentationMaxTokens gets a reference to the given NullableInt32 and assigns it to the PeerModelRepresentationMaxTokens field.
+func (o *BankTemplateConfig) SetPeerModelRepresentationMaxTokens(v int32) {
+	o.PeerModelRepresentationMaxTokens.Set(&v)
+}
+// SetPeerModelRepresentationMaxTokensNil sets the value for PeerModelRepresentationMaxTokens to be an explicit nil
+func (o *BankTemplateConfig) SetPeerModelRepresentationMaxTokensNil() {
+	o.PeerModelRepresentationMaxTokens.Set(nil)
+}
+
+// UnsetPeerModelRepresentationMaxTokens ensures that no value is present for PeerModelRepresentationMaxTokens, not even an explicit nil
+func (o *BankTemplateConfig) UnsetPeerModelRepresentationMaxTokens() {
+	o.PeerModelRepresentationMaxTokens.Unset()
 }
 
 // GetEnableTemporalRetrieval returns the EnableTemporalRetrieval field value if set, zero value otherwise (both if not set or set to explicit null).
@@ -1952,6 +2253,27 @@ func (o BankTemplateConfig) ToMap() (map[string]interface{}, error) {
 	}
 	if o.ObservationsMission.IsSet() {
 		toSerialize["observations_mission"] = o.ObservationsMission.Get()
+	}
+	if o.EnablePeerModeling.IsSet() {
+		toSerialize["enable_peer_modeling"] = o.EnablePeerModeling.Get()
+	}
+	if o.EnableAutoPeerModeling.IsSet() {
+		toSerialize["enable_auto_peer_modeling"] = o.EnableAutoPeerModeling.Get()
+	}
+	if o.PeerModelMinNewFacts.IsSet() {
+		toSerialize["peer_model_min_new_facts"] = o.PeerModelMinNewFacts.Get()
+	}
+	if o.PeerModelCooldownSeconds.IsSet() {
+		toSerialize["peer_model_cooldown_seconds"] = o.PeerModelCooldownSeconds.Get()
+	}
+	if o.PeerModelMaxCardEntries.IsSet() {
+		toSerialize["peer_model_max_card_entries"] = o.PeerModelMaxCardEntries.Get()
+	}
+	if o.PeerModelMinPatternSources.IsSet() {
+		toSerialize["peer_model_min_pattern_sources"] = o.PeerModelMinPatternSources.Get()
+	}
+	if o.PeerModelRepresentationMaxTokens.IsSet() {
+		toSerialize["peer_model_representation_max_tokens"] = o.PeerModelRepresentationMaxTokens.Get()
 	}
 	if o.EnableTemporalRetrieval.IsSet() {
 		toSerialize["enable_temporal_retrieval"] = o.EnableTemporalRetrieval.Get()

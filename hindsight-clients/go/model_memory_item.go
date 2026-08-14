@@ -29,6 +29,7 @@ type MemoryItem struct {
 	Entities []EntityInput `json:"entities,omitempty"`
 	Tags []string `json:"tags,omitempty"`
 	ObservationScopes NullableObservationScopes `json:"observation_scopes,omitempty"`
+	PeerContext NullableRetainPeerContext `json:"peer_context,omitempty"`
 	Strategy NullableString `json:"strategy,omitempty"`
 	UpdateMode NullableString `json:"update_mode,omitempty"`
 }
@@ -344,6 +345,48 @@ func (o *MemoryItem) UnsetObservationScopes() {
 	o.ObservationScopes.Unset()
 }
 
+// GetPeerContext returns the PeerContext field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *MemoryItem) GetPeerContext() RetainPeerContext {
+	if o == nil || IsNil(o.PeerContext.Get()) {
+		var ret RetainPeerContext
+		return ret
+	}
+	return *o.PeerContext.Get()
+}
+
+// GetPeerContextOk returns a tuple with the PeerContext field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *MemoryItem) GetPeerContextOk() (*RetainPeerContext, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.PeerContext.Get(), o.PeerContext.IsSet()
+}
+
+// HasPeerContext returns a boolean if a field has been set.
+func (o *MemoryItem) HasPeerContext() bool {
+	if o != nil && o.PeerContext.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetPeerContext gets a reference to the given NullableRetainPeerContext and assigns it to the PeerContext field.
+func (o *MemoryItem) SetPeerContext(v RetainPeerContext) {
+	o.PeerContext.Set(&v)
+}
+// SetPeerContextNil sets the value for PeerContext to be an explicit nil
+func (o *MemoryItem) SetPeerContextNil() {
+	o.PeerContext.Set(nil)
+}
+
+// UnsetPeerContext ensures that no value is present for PeerContext, not even an explicit nil
+func (o *MemoryItem) UnsetPeerContext() {
+	o.PeerContext.Unset()
+}
+
 // GetStrategy returns the Strategy field value if set, zero value otherwise (both if not set or set to explicit null).
 func (o *MemoryItem) GetStrategy() string {
 	if o == nil || IsNil(o.Strategy.Get()) {
@@ -459,6 +502,9 @@ func (o MemoryItem) ToMap() (map[string]interface{}, error) {
 	}
 	if o.ObservationScopes.IsSet() {
 		toSerialize["observation_scopes"] = o.ObservationScopes.Get()
+	}
+	if o.PeerContext.IsSet() {
+		toSerialize["peer_context"] = o.PeerContext.Get()
 	}
 	if o.Strategy.IsSet() {
 		toSerialize["strategy"] = o.Strategy.Get()

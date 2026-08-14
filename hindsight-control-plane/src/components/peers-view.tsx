@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import {
@@ -28,10 +28,23 @@ import { useBank } from "@/lib/bank-context";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { FeatureNotEnabled } from "@/components/feature-not-enabled";
 
@@ -48,8 +61,7 @@ type PeerForm = {
 };
 
 type OperationFeedback = {
-  kind: "model" | "rebuild";
-  operationId: string | null;
+  operationId: string;
 };
 
 type BootstrapOperationStatus = {
@@ -197,6 +209,17 @@ function getErrorMessage(error: unknown): string {
 export function PeersView({ enabled }: { enabled: boolean }) {
   const t = useTranslations("peersView");
   const { currentBank } = useBank();
+  // Scope generation: incremented on bank/enabled change and unmount. Every
+  // async loader/action captures the generation it started under and discards
+  // its state writes, toasts, reloads, and finally-clauses once the scope has
+  // moved on. This prevents a late bank-A / pair-A response from overwriting
+  // the currently rendered bank-B / pair-B state.
+  const scopeGenerationRef = useRef(0);
+  const mountedRef = useRef(true);
+  // Bootstrap polling backpressure: only one list→status chain runs at a time,
+  // and a status is committed only when it matches the expected operation.
+  const bootstrapPollingRef = useRef(false);
+  const expectedBootstrapOperationRef = useRef<string | null>(null);
   const [peers, setPeers] = useState<Peer[]>([]);
   const [loadingPeers, setLoadingPeers] = useState(false);
   const [peerError, setPeerError] = useState<string | null>(null);
@@ -224,6 +247,52 @@ export function PeersView({ enabled }: { enabled: boolean }) {
   const [correctionPlan, setCorrectionPlan] = useState<PeerCorrectionPlan | null>(null);
   const [correctionError, setCorrectionError] = useState<string | null>(null);
   const [savingCorrection, setSavingCorrection] = useState(false);
+  // A correction plan belongs to the bank+pair it was generated for. Submitting
+  // it against a different scope would apply an old plan to new pair IDs.
+  const correctionPlanScopeRef = useRef<{ observerId: string; targetId: string } | null>(null);
+
+  const isCurrentScope = useCallback((generation: number) => {
+    return mountedRef.current && generation === scopeGenerationRef.current;
+  }, []);
+
+  // Hard reset of every projection when the bank scope changes (or peer
+  // modeling is disabled). All async work from the previous scope is
+  // invalidated by bumping the generation before the new scope's loaders run.
+  useEffect(() => {
+    scopeGenerationRef.current += 1;
+    bootstrapPollingRef.current = false;
+    expectedBootstrapOperationRef.current = null;
+    setPeers([]);
+    setLoadingPeers(false);
+    setPeerError(null);
+    setObserverId("");
+    setTargetId("");
+    setContext(null);
+    setClaims([]);
+    setLoadingContext(false);
+    setContextError(null);
+    setClaimsError(null);
+    setOperation(null);
+    setOperationFeedback(null);
+    setBootstrapStatus(null);
+    setBootstrapError(null);
+    setSubmittingBootstrap(false);
+    setCorrectionDialogOpen(false);
+    setCorrectionText("");
+    setCorrectionPlan(null);
+    correctionPlanScopeRef.current = null;
+    setCorrectionError(null);
+    setSavingCorrection(false);
+    setPeerDialogOpen(false);
+    setSavingPeer(false);
+  }, [currentBank, enabled]);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      scopeGenerationRef.current += 1;
+    };
+  }, []);
 
   const observer = useMemo(() => peers.find((peer) => peer.id === observerId), [peers, observerId]);
   const target = useMemo(() => peers.find((peer) => peer.id === targetId), [peers, targetId]);
@@ -252,40 +321,76 @@ export function PeersView({ enabled }: { enabled: boolean }) {
 
   const loadPeers = useCallback(async () => {
     if (!currentBank || !enabled) return;
+    const generation = scopeGenerationRef.current;
     setLoadingPeers(true);
     setPeerError(null);
     try {
       const nextPeers = normalizePeers(await client.listPeers(currentBank));
+      if (!isCurrentScope(generation)) return;
       setPeers(nextPeers);
-      setObserverId((current) => (nextPeers.some((peer) => peer.id === current) ? current : nextPeers[0]?.id ?? ""));
-      setTargetId((current) => (nextPeers.some((peer) => peer.id === current) ? current : nextPeers[0]?.id ?? ""));
+      setObserverId((current) =>
+        nextPeers.some((peer) => peer.id === current) ? current : (nextPeers[0]?.id ?? "")
+      );
+      setTargetId((current) =>
+        nextPeers.some((peer) => peer.id === current) ? current : (nextPeers[0]?.id ?? "")
+      );
     } catch (error) {
+      if (!isCurrentScope(generation)) return;
       setPeerError(getErrorMessage(error));
     } finally {
-      setLoadingPeers(false);
+      if (isCurrentScope(generation)) setLoadingPeers(false);
     }
-  }, [currentBank, enabled]);
+  }, [currentBank, enabled, isCurrentScope]);
 
   const loadBootstrapStatus = useCallback(async () => {
     if (!currentBank || !enabled) return;
+    if (bootstrapPollingRef.current) return;
+    bootstrapPollingRef.current = true;
+    const generation = scopeGenerationRef.current;
     try {
-      const operations = await client.listOperations(currentBank, { type: "peer_bootstrap", limit: 1 });
+      const operations = await client.listOperations(currentBank, {
+        type: "peer_bootstrap",
+        limit: 1,
+      });
+      if (!isCurrentScope(generation)) return;
       const latest = operations.operations[0];
       if (!latest) {
         setBootstrapStatus(null);
         setBootstrapError(null);
         return;
       }
-      const status = await client.getOperationStatus(currentBank, latest.id);
+      const discoveredId = latest.id;
+      // Commit status only for the operation this scope is actually watching.
+      // A newer operation discovered between list and status must win.
+      const expected = expectedBootstrapOperationRef.current;
+      if (expected !== null && discoveredId !== expected) return;
+      const status = await client.getOperationStatus(currentBank, discoveredId);
+      if (!isCurrentScope(generation)) return;
+      // Re-discover before committing: a newer operation may have appeared
+      // while the status request was in flight. If the latest operation
+      // changed, drop this result and let the next poll pick up the winner.
+      const recheck = await client.listOperations(currentBank, {
+        type: "peer_bootstrap",
+        limit: 1,
+      });
+      if (!isCurrentScope(generation)) return;
+      const latestNow = recheck.operations[0]?.id ?? null;
+      if (latestNow !== discoveredId) return;
+      if (expected !== null && status.operation_id !== expected) return;
+      if (status.operation_id !== discoveredId) return;
       setBootstrapStatus(status);
       setBootstrapError(null);
     } catch (error) {
+      if (!isCurrentScope(generation)) return;
       setBootstrapError(getErrorMessage(error));
+    } finally {
+      if (isCurrentScope(generation)) bootstrapPollingRef.current = false;
     }
-  }, [currentBank, enabled]);
+  }, [currentBank, enabled, isCurrentScope]);
 
   const loadDirectionalContext = useCallback(async () => {
     if (!currentBank || !enabled || !observerId || !targetId) return;
+    const generation = scopeGenerationRef.current;
     setLoadingContext(true);
     setContextError(null);
     setContext(null);
@@ -295,12 +400,13 @@ export function PeersView({ enabled }: { enabled: boolean }) {
       client.getPeerContext(currentBank, observerId, targetId),
       client.getPeerClaims(currentBank, observerId, targetId),
     ]);
+    if (!isCurrentScope(generation)) return;
     if (contextResult.status === "fulfilled") setContext(contextResult.value);
     if (claimsResult.status === "fulfilled") setClaims(normalizeClaims(claimsResult.value));
     if (contextResult.status === "rejected") setContextError(getErrorMessage(contextResult.reason));
     if (claimsResult.status === "rejected") setClaimsError(getErrorMessage(claimsResult.reason));
     setLoadingContext(false);
-  }, [currentBank, enabled, observerId, targetId]);
+  }, [currentBank, enabled, observerId, targetId, isCurrentScope]);
 
   useEffect(() => {
     void loadPeers();
@@ -357,6 +463,7 @@ export function PeersView({ enabled }: { enabled: boolean }) {
       setPeerFormError(t("peerIdRequired"));
       return;
     }
+    const generation = scopeGenerationRef.current;
     setSavingPeer(true);
     setPeerFormError(null);
     try {
@@ -366,6 +473,7 @@ export function PeersView({ enabled }: { enabled: boolean }) {
           kind: peerForm.kind,
           ...(metadata === undefined ? {} : { metadata }),
         });
+        if (!isCurrentScope(generation)) return;
         toast.success(t("peerUpdated"));
       } else {
         await client.createPeer(currentBank, {
@@ -373,50 +481,64 @@ export function PeersView({ enabled }: { enabled: boolean }) {
           kind: peerForm.kind,
           ...(metadata === undefined ? {} : { metadata }),
         });
+        if (!isCurrentScope(generation)) return;
         toast.success(t("peerCreated"));
       }
       setPeerDialogOpen(false);
       await loadPeers();
     } catch (error) {
+      if (!isCurrentScope(generation)) return;
       setPeerFormError(getErrorMessage(error));
     } finally {
-      setSavingPeer(false);
+      if (isCurrentScope(generation)) setSavingPeer(false);
     }
   };
 
   const runModelAction = async (kind: "model" | "rebuild") => {
     if (!currentBank || !observerId || !targetId) return;
+    const generation = scopeGenerationRef.current;
     setOperation(kind);
     setOperationFeedback(null);
     try {
-      const result = kind === "model"
-        ? await client.modelPeer(currentBank, observerId, targetId)
-        : await client.rebuildPeer(currentBank, observerId, targetId);
-      const operationId = typeof result.operation_id === "string" ? result.operation_id : null;
-      setOperationFeedback({ kind, operationId });
-      toast.success(t("operationSubmitted"), {
-        description: operationId ? t("operationSubmittedWithId", { id: operationId }) : t("operationSubmittedWithoutId"),
-      });
+      if (kind === "model") {
+        const result = await client.modelPeer(currentBank, observerId, targetId);
+        if (!isCurrentScope(generation)) return;
+        setOperationFeedback({ operationId: result.operation_id });
+        toast.success(t("operationSubmitted"), {
+          description: t("operationSubmittedWithId", { id: result.operation_id }),
+        });
+      } else {
+        await client.rebuildPeer(currentBank, observerId, targetId);
+        if (!isCurrentScope(generation)) return;
+        await loadDirectionalContext();
+        if (!isCurrentScope(generation)) return;
+        toast.success(t("rebuildOperationFeedback"));
+      }
     } catch {
       // The API client displays the structured error toast.
     } finally {
-      setOperation(null);
+      if (isCurrentScope(generation)) setOperation(null);
     }
   };
 
   const runBootstrap = async () => {
     if (!currentBank) return;
+    const generation = scopeGenerationRef.current;
     setSubmittingBootstrap(true);
     setBootstrapError(null);
     try {
       const result = await client.bootstrapPeers(currentBank);
+      if (!isCurrentScope(generation)) return;
+      expectedBootstrapOperationRef.current = result.operation_id;
       const status = await client.getOperationStatus(currentBank, result.operation_id);
+      if (!isCurrentScope(generation)) return;
       setBootstrapStatus(status);
       toast.success(result.deduplicated ? t("bootstrapAlreadyRunning") : t("bootstrapSubmitted"));
     } catch (error) {
+      if (!isCurrentScope(generation)) return;
       setBootstrapError(getErrorMessage(error));
     } finally {
-      setSubmittingBootstrap(false);
+      if (isCurrentScope(generation)) setSubmittingBootstrap(false);
     }
   };
 
@@ -432,6 +554,7 @@ export function PeersView({ enabled }: { enabled: boolean }) {
       setCorrectionError(t("correctionRequired"));
       return;
     }
+    const generation = scopeGenerationRef.current;
     setSavingCorrection(true);
     setCorrectionError(null);
     try {
@@ -441,29 +564,44 @@ export function PeersView({ enabled }: { enabled: boolean }) {
         targetId,
         correctionText.trim()
       );
+      if (!isCurrentScope(generation)) return;
       setCorrectionPlan(plan);
+      correctionPlanScopeRef.current = { observerId, targetId };
     } catch (error) {
+      if (!isCurrentScope(generation)) return;
       setCorrectionError(getErrorMessage(error));
     } finally {
-      setSavingCorrection(false);
+      if (isCurrentScope(generation)) setSavingCorrection(false);
     }
   };
 
   const submitCorrection = async () => {
     if (!currentBank || !observerId || !targetId || !correctionPlan) return;
+    const planScope = correctionPlanScopeRef.current;
+    if (
+      planScope === null ||
+      planScope.observerId !== observerId ||
+      planScope.targetId !== targetId
+    ) {
+      setCorrectionError(t("correctionRequired"));
+      return;
+    }
+    const generation = scopeGenerationRef.current;
     setSavingCorrection(true);
     setCorrectionError(null);
     try {
       await client.createPeerCorrection(currentBank, observerId, targetId, {
         plan: correctionPlan,
       });
+      if (!isCurrentScope(generation)) return;
       toast.success(t("correctionSubmitted"));
       setCorrectionDialogOpen(false);
       await loadDirectionalContext();
     } catch (error) {
+      if (!isCurrentScope(generation)) return;
       setCorrectionError(getErrorMessage(error));
     } finally {
-      setSavingCorrection(false);
+      if (isCurrentScope(generation)) setSavingCorrection(false);
     }
   };
 
@@ -519,7 +657,11 @@ export function PeersView({ enabled }: { enabled: boolean }) {
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           {renderEvidence(entry)}
-          {claim.confidence != null && <span className="text-xs text-muted-foreground">{t("confidence", { value: Math.round(claim.confidence * 100) })}</span>}
+          {claim.confidence != null && (
+            <span className="text-xs text-muted-foreground">
+              {t("confidence", { value: Math.round(claim.confidence * 100) })}
+            </span>
+          )}
         </div>
       </div>
     );
@@ -537,13 +679,18 @@ export function PeersView({ enabled }: { enabled: boolean }) {
 
   if (!currentBank) return null;
 
-  const bootstrapRunning = bootstrapStatus?.status === "pending" || bootstrapStatus?.status === "processing";
+  const bootstrapRunning =
+    bootstrapStatus?.status === "pending" || bootstrapStatus?.status === "processing";
   const bootstrapProgress = bootstrapStatus?.progress;
-  const bootstrapPercent = bootstrapStatus?.status === "completed"
-    ? 100
-    : bootstrapProgress?.total && bootstrapProgress.total > 0
-      ? Math.min(100, Math.round(((bootstrapProgress.processed ?? 0) / bootstrapProgress.total) * 100))
-      : 0;
+  const bootstrapPercent =
+    bootstrapStatus?.status === "completed"
+      ? 100
+      : bootstrapProgress?.total && bootstrapProgress.total > 0
+        ? Math.min(
+            100,
+            Math.round(((bootstrapProgress.processed ?? 0) / bootstrapProgress.total) * 100)
+          )
+        : 0;
   const bootstrapResult = asRecord(bootstrapStatus?.result_metadata?.peer_bootstrap);
 
   return (
@@ -566,8 +713,17 @@ export function PeersView({ enabled }: { enabled: boolean }) {
           <p className="mt-2 text-muted-foreground">{t("description")}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" onClick={() => void runBootstrap()} disabled={bootstrapRunning || submittingBootstrap}>
-            {bootstrapRunning || submittingBootstrap ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void runBootstrap()}
+            disabled={bootstrapRunning || submittingBootstrap}
+          >
+            {bootstrapRunning || submittingBootstrap ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Sparkles className="mr-2 h-4 w-4" />
+            )}
             {bootstrapRunning ? t("bootstrapRunning") : t("runBootstrap")}
           </Button>
           <Button size="sm" onClick={openCreatePeer}>
@@ -591,18 +747,32 @@ export function PeersView({ enabled }: { enabled: boolean }) {
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="h-2 overflow-hidden rounded-full bg-muted">
-            <div className="h-full bg-primary transition-[width] duration-300" style={{ width: `${bootstrapPercent}%` }} />
+            <div
+              className="h-full bg-primary transition-[width] duration-300"
+              style={{ width: `${bootstrapPercent}%` }}
+            />
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-            <span>{bootstrapProgress ? t("bootstrapStage", { stage: bootstrapProgress.stage }) : t("bootstrapWaiting")}</span>
+            <span>
+              {bootstrapProgress
+                ? t("bootstrapStage", { stage: bootstrapProgress.stage })
+                : t("bootstrapWaiting")}
+            </span>
             <span>{bootstrapPercent}%</span>
           </div>
           {bootstrapProgress?.detail && (
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              {["evidence_processed", "peers_discovered", "claims_materialized", "card_entries"].map((key) => (
+              {[
+                "evidence_processed",
+                "peers_discovered",
+                "claims_materialized",
+                "card_entries",
+              ].map((key) => (
                 <div key={key} className="rounded-lg border border-border/70 px-3 py-2">
                   <p className="text-xs text-muted-foreground">{t(`bootstrapCounter.${key}`)}</p>
-                  <p className="mt-1 font-mono text-sm text-foreground">{bootstrapProgress.detail?.[key] ?? 0}</p>
+                  <p className="mt-1 font-mono text-sm text-foreground">
+                    {bootstrapProgress.detail?.[key] ?? 0}
+                  </p>
                 </div>
               ))}
             </div>
@@ -620,11 +790,15 @@ export function PeersView({ enabled }: { enabled: boolean }) {
           {(bootstrapError || bootstrapStatus?.error_message) && (
             <Alert variant="destructive">
               <AlertTitle>{t("bootstrapErrorTitle")}</AlertTitle>
-              <AlertDescription>{bootstrapError ?? bootstrapStatus?.error_message}</AlertDescription>
+              <AlertDescription>
+                {bootstrapError ?? bootstrapStatus?.error_message}
+              </AlertDescription>
             </Alert>
           )}
           {bootstrapStatus?.operation_id && (
-            <p className="break-all font-mono text-[11px] text-muted-foreground">{bootstrapStatus.operation_id}</p>
+            <p className="break-all font-mono text-[11px] text-muted-foreground">
+              {bootstrapStatus.operation_id}
+            </p>
           )}
         </CardContent>
       </Card>
@@ -634,7 +808,12 @@ export function PeersView({ enabled }: { enabled: boolean }) {
           <AlertTitle>{t("loadErrorTitle")}</AlertTitle>
           <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
             <span>{peerError}</span>
-            <Button variant="outline" size="sm" onClick={() => void loadPeers()} disabled={loadingPeers}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void loadPeers()}
+              disabled={loadingPeers}
+            >
               {t("retry")}
             </Button>
           </AlertDescription>
@@ -668,11 +847,24 @@ export function PeersView({ enabled }: { enabled: boolean }) {
                 <div key={peer.id} className="rounded-lg border border-border/70 p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="truncate font-medium text-foreground" title={peer.external_id}>{peer.display_name || peer.external_id}</p>
-                      {peer.display_name && <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{peer.external_id}</p>}
-                      <p className="mt-1 text-xs text-muted-foreground">{kindLabels[peer.kind] ?? peer.kind}</p>
+                      <p className="truncate font-medium text-foreground" title={peer.external_id}>
+                        {peer.display_name || peer.external_id}
+                      </p>
+                      {peer.display_name && (
+                        <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                          {peer.external_id}
+                        </p>
+                      )}
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {kindLabels[peer.kind] ?? peer.kind}
+                      </p>
                     </div>
-                    <Button variant="ghost" size="sm" onClick={() => openEditPeer(peer)} aria-label={t("editPeerAria", { id: peer.id })}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => openEditPeer(peer)}
+                      aria-label={t("editPeerAria", { id: peer.id })}
+                    >
                       <Pencil className="h-4 w-4" />
                     </Button>
                   </div>
@@ -699,39 +891,84 @@ export function PeersView({ enabled }: { enabled: boolean }) {
               <div className="space-y-2">
                 <Label htmlFor="peer-observer">{t("observerLabel")}</Label>
                 <Select value={observerId} onValueChange={setObserverId}>
-                  <SelectTrigger id="peer-observer"><SelectValue placeholder={t("selectPeer")} /></SelectTrigger>
+                  <SelectTrigger id="peer-observer">
+                    <SelectValue placeholder={t("selectPeer")} />
+                  </SelectTrigger>
                   <SelectContent>
-                    {peers.map((peer) => <SelectItem key={peer.id} value={peer.id}>{peer.display_name || peer.external_id}</SelectItem>)}
+                    {peers.map((peer) => (
+                      <SelectItem key={peer.id} value={peer.id}>
+                        {peer.display_name || peer.external_id}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
-              <ArrowRight className="hidden h-5 w-5 text-muted-foreground md:block" aria-hidden="true" />
+              <ArrowRight
+                className="hidden h-5 w-5 text-muted-foreground md:block"
+                aria-hidden="true"
+              />
               <div className="space-y-2">
                 <Label htmlFor="peer-target">{t("targetLabel")}</Label>
                 <Select value={targetId} onValueChange={setTargetId}>
-                  <SelectTrigger id="peer-target"><SelectValue placeholder={t("selectPeer")} /></SelectTrigger>
+                  <SelectTrigger id="peer-target">
+                    <SelectValue placeholder={t("selectPeer")} />
+                  </SelectTrigger>
                   <SelectContent>
-                    {peers.map((peer) => <SelectItem key={peer.id} value={peer.id}>{peer.display_name || peer.external_id}</SelectItem>)}
+                    {peers.map((peer) => (
+                      <SelectItem key={peer.id} value={peer.id}>
+                        {peer.display_name || peer.external_id}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-sm">
-              <span className="font-medium text-foreground">{observer?.display_name || observer?.external_id}</span>
+              <span className="font-medium text-foreground">
+                {observer?.display_name || observer?.external_id}
+              </span>
               <ArrowRight className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-              <span className="font-medium text-foreground">{target?.display_name || target?.external_id}</span>
-              {observerId === targetId && <span className="rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-xs text-primary">{t("selfPair")}</span>}
+              <span className="font-medium text-foreground">
+                {target?.display_name || target?.external_id}
+              </span>
+              {observerId === targetId && (
+                <span className="rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-xs text-primary">
+                  {t("selfPair")}
+                </span>
+              )}
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button size="sm" onClick={() => void runModelAction("model")} disabled={loadingContext || operation !== null}>
-                {operation === "model" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+              <Button
+                size="sm"
+                onClick={() => void runModelAction("model")}
+                disabled={loadingContext || operation !== null}
+              >
+                {operation === "model" ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Sparkles className="mr-2 h-4 w-4" />
+                )}
                 {operation === "model" ? t("modeling") : t("model")}
               </Button>
-              <Button size="sm" variant="outline" onClick={() => void runModelAction("rebuild")} disabled={loadingContext || operation !== null}>
-                {operation === "rebuild" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void runModelAction("rebuild")}
+                disabled={loadingContext || operation !== null}
+              >
+                {operation === "rebuild" ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <RotateCcw className="mr-2 h-4 w-4" />
+                )}
                 {operation === "rebuild" ? t("rebuilding") : t("rebuild")}
               </Button>
-              <Button size="sm" variant="outline" onClick={openCorrection} disabled={loadingContext || operation !== null}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={openCorrection}
+                disabled={loadingContext || operation !== null}
+              >
                 <Pencil className="mr-2 h-4 w-4" />
                 {t("addCorrection")}
               </Button>
@@ -741,8 +978,8 @@ export function PeersView({ enabled }: { enabled: boolean }) {
                 <Check className="h-4 w-4" />
                 <AlertTitle>{t("operationFeedbackTitle")}</AlertTitle>
                 <AlertDescription>
-                  {operationFeedback.kind === "model" ? t("modelOperationFeedback") : t("rebuildOperationFeedback")}
-                  {operationFeedback.operationId && <span className="ml-1 font-mono text-xs">{operationFeedback.operationId}</span>}
+                  {t("modelOperationFeedback")}
+                  <span className="ml-1 font-mono text-xs">{operationFeedback.operationId}</span>
                 </AlertDescription>
               </Alert>
             )}
@@ -757,12 +994,24 @@ export function PeersView({ enabled }: { enabled: boolean }) {
               <AlertTitle>{t("contextErrorTitle")}</AlertTitle>
               <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
                 <span>{contextError}</span>
-                <Button variant="outline" size="sm" onClick={() => void loadDirectionalContext()} disabled={loadingContext}>{t("retry")}</Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void loadDirectionalContext()}
+                  disabled={loadingContext}
+                >
+                  {t("retry")}
+                </Button>
               </AlertDescription>
             </Alert>
           )}
           {loadingContext ? (
-            <Card><CardContent className="flex items-center gap-2 py-10 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />{t("loadingContext")}</CardContent></Card>
+            <Card>
+              <CardContent className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {t("loadingContext")}
+              </CardContent>
+            </Card>
           ) : (
             <>
               <Card>
@@ -773,14 +1022,28 @@ export function PeersView({ enabled }: { enabled: boolean }) {
                 <CardContent className="grid gap-4 md:grid-cols-2">
                   {CARD_CATEGORIES.map((category) => (
                     <section key={category} className="rounded-lg border border-border/70 p-4">
-                      <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">{categoryLabels[category]}</h3>
+                      <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                        {categoryLabels[category]}
+                      </h3>
                       {card[category].length === 0 ? (
-                        <p className="mt-3 text-sm text-muted-foreground">{t("noCategoryClaims")}</p>
+                        <p className="mt-3 text-sm text-muted-foreground">
+                          {t("noCategoryClaims")}
+                        </p>
                       ) : (
                         <div className="mt-3 space-y-3">
                           {card[category].map((entry, index) => {
                             const record = entry as Record<string, unknown>;
-                            return <div key={String(entry.id ?? index)} className="border-l-2 border-primary/40 pl-3"><p className="text-sm text-foreground whitespace-pre-wrap">{getEntryText(record)}</p><div className="mt-2">{renderEvidence(record)}</div></div>;
+                            return (
+                              <div
+                                key={String(entry.id ?? index)}
+                                className="border-l-2 border-primary/40 pl-3"
+                              >
+                                <p className="text-sm text-foreground whitespace-pre-wrap">
+                                  {getEntryText(record)}
+                                </p>
+                                <div className="mt-2">{renderEvidence(record)}</div>
+                              </div>
+                            );
                           })}
                         </div>
                       )}
@@ -797,8 +1060,15 @@ export function PeersView({ enabled }: { enabled: boolean }) {
                 <CardContent>
                   {(() => {
                     const representation = getNestedValue(context, "representation");
-                    if (representation == null) return <p className="text-sm text-muted-foreground">{t("notAvailable")}</p>;
-                    return <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg border border-border/70 bg-muted/20 p-4 font-mono text-sm text-foreground">{typeof representation === "string" ? representation : JSON.stringify(representation, null, 2)}</pre>;
+                    if (representation == null)
+                      return <p className="text-sm text-muted-foreground">{t("notAvailable")}</p>;
+                    return (
+                      <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg border border-border/70 bg-muted/20 p-4 font-mono text-sm text-foreground">
+                        {typeof representation === "string"
+                          ? representation
+                          : JSON.stringify(representation, null, 2)}
+                      </pre>
+                    );
                   })()}
                 </CardContent>
               </Card>
@@ -818,17 +1088,39 @@ export function PeersView({ enabled }: { enabled: boolean }) {
                   {claims.length === 0 ? (
                     <p className="text-sm text-muted-foreground">{t("noClaims")}</p>
                   ) : (
-                    [...CLAIM_STATUSES, ...Object.keys(claimGroups).filter((status) => !CLAIM_STATUSES.includes(status as ClaimStatusGroup))].map((status) => {
+                    [
+                      ...CLAIM_STATUSES,
+                      ...Object.keys(claimGroups).filter(
+                        (status) => !CLAIM_STATUSES.includes(status as ClaimStatusGroup)
+                      ),
+                    ].map((status) => {
                       const statusClaims = claimGroups[status] ?? [];
-                      return <section key={status}><h3 className="mb-2 text-sm font-semibold text-foreground">{statusLabels[status as ClaimStatusGroup] ?? status}</h3>{statusClaims.length === 0 ? <p className="text-sm text-muted-foreground">{t("noClaimsInStatus")}</p> : <div className="space-y-2">{statusClaims.map(renderClaim)}</div>}</section>;
+                      return (
+                        <section key={status}>
+                          <h3 className="mb-2 text-sm font-semibold text-foreground">
+                            {statusLabels[status as ClaimStatusGroup] ?? status}
+                          </h3>
+                          {statusClaims.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">{t("noClaimsInStatus")}</p>
+                          ) : (
+                            <div className="space-y-2">{statusClaims.map(renderClaim)}</div>
+                          )}
+                        </section>
+                      );
                     })
                   )}
                 </CardContent>
               </Card>
 
               <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                {context?.version != null && <span>{t("version", { version: context.version })}</span>}
-                {context?.updated_at && <span>{t("updatedAt", { date: new Date(context.updated_at).toLocaleString() })}</span>}
+                {context?.version != null && (
+                  <span>{t("version", { version: context.version })}</span>
+                )}
+                {context?.updated_at && (
+                  <span>
+                    {t("updatedAt", { date: new Date(context.updated_at).toLocaleString() })}
+                  </span>
+                )}
                 <span>{t("directionalNote")}</span>
               </div>
             </>
@@ -840,30 +1132,72 @@ export function PeersView({ enabled }: { enabled: boolean }) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{editingPeer ? t("editPeerTitle") : t("createPeerTitle")}</DialogTitle>
-            <DialogDescription>{editingPeer ? t("editPeerDescription") : t("createPeerDescription")}</DialogDescription>
+            <DialogDescription>
+              {editingPeer ? t("editPeerDescription") : t("createPeerDescription")}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="peer-id">{t("peerIdLabel")}</Label>
-              <Input id="peer-id" value={peerForm.id} disabled={editingPeer !== null} onChange={(event) => setPeerForm((current) => ({ ...current, id: event.target.value }))} placeholder={t("peerIdPlaceholder")} />
+              <Input
+                id="peer-id"
+                value={peerForm.id}
+                disabled={editingPeer !== null}
+                onChange={(event) =>
+                  setPeerForm((current) => ({ ...current, id: event.target.value }))
+                }
+                placeholder={t("peerIdPlaceholder")}
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="peer-kind">{t("kindLabel")}</Label>
-              <Select value={peerForm.kind} onValueChange={(kind) => setPeerForm((current) => ({ ...current, kind }))}>
-                <SelectTrigger id="peer-kind"><SelectValue /></SelectTrigger>
-                <SelectContent>{PEER_KINDS.map((kind) => <SelectItem key={kind} value={kind}>{kindLabels[kind]}</SelectItem>)}</SelectContent>
+              <Select
+                value={peerForm.kind}
+                onValueChange={(kind) => setPeerForm((current) => ({ ...current, kind }))}
+              >
+                <SelectTrigger id="peer-kind">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PEER_KINDS.map((kind) => (
+                    <SelectItem key={kind} value={kind}>
+                      {kindLabels[kind]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
               <Label htmlFor="peer-metadata">{t("metadataLabel")}</Label>
-              <Textarea id="peer-metadata" value={peerForm.metadata} onChange={(event) => setPeerForm((current) => ({ ...current, metadata: event.target.value }))} placeholder={t("metadataPlaceholder")} rows={6} />
+              <Textarea
+                id="peer-metadata"
+                value={peerForm.metadata}
+                onChange={(event) =>
+                  setPeerForm((current) => ({ ...current, metadata: event.target.value }))
+                }
+                placeholder={t("metadataPlaceholder")}
+                rows={6}
+              />
               <p className="text-xs text-muted-foreground">{t("metadataHelp")}</p>
             </div>
-            {peerFormError && <Alert variant="destructive"><AlertDescription>{peerFormError}</AlertDescription></Alert>}
+            {peerFormError && (
+              <Alert variant="destructive">
+                <AlertDescription>{peerFormError}</AlertDescription>
+              </Alert>
+            )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setPeerDialogOpen(false)} disabled={savingPeer}>{t("cancel")}</Button>
-            <Button onClick={() => void savePeer()} disabled={savingPeer || !peerForm.id.trim()}>{savingPeer && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{editingPeer ? t("savePeer") : t("createPeer")}</Button>
+            <Button
+              variant="outline"
+              onClick={() => setPeerDialogOpen(false)}
+              disabled={savingPeer}
+            >
+              {t("cancel")}
+            </Button>
+            <Button onClick={() => void savePeer()} disabled={savingPeer || !peerForm.id.trim()}>
+              {savingPeer && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {editingPeer ? t("savePeer") : t("createPeer")}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -894,7 +1228,10 @@ export function PeersView({ enabled }: { enabled: boolean }) {
                   <Label>{t("correctionPlanAdds")}</Label>
                   <div className="space-y-2">
                     {correctionPlan.claims.map((claim, index) => (
-                      <div key={`${claim.claim_type}-${index}`} className="rounded-md border bg-background p-3 text-sm">
+                      <div
+                        key={`${claim.claim_type}-${index}`}
+                        className="rounded-md border bg-background p-3 text-sm"
+                      >
                         <div className="mb-1 text-xs font-medium text-muted-foreground">
                           {categoryLabels[claim.claim_type as CardCategory] ?? claim.claim_type}
                         </div>
@@ -910,35 +1247,65 @@ export function PeersView({ enabled }: { enabled: boolean }) {
                       {correctionPlan.supersede_claim_ids.map((claimId) => {
                         const claim = claims.find((candidate) => candidate.id === claimId);
                         return (
-                          <div key={claimId} className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
-                            {claim ? getEntryText(claim as unknown as Record<string, unknown>) : claimId}
+                          <div
+                            key={claimId}
+                            className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm"
+                          >
+                            {claim
+                              ? getEntryText(claim as unknown as Record<string, unknown>)
+                              : claimId}
                           </div>
                         );
                       })}
                     </div>
                   ) : (
-                    <p className="text-sm text-muted-foreground">{t("correctionPlanNoReplacements")}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {t("correctionPlanNoReplacements")}
+                    </p>
                   )}
                 </div>
-                <Alert><AlertDescription>{correctionPlan.reason}</AlertDescription></Alert>
+                <Alert>
+                  <AlertDescription>{correctionPlan.reason}</AlertDescription>
+                </Alert>
               </div>
             ) : (
-              <Alert><AlertDescription>{t("correctionLockedNotice")}</AlertDescription></Alert>
+              <Alert>
+                <AlertDescription>{t("correctionLockedNotice")}</AlertDescription>
+              </Alert>
             )}
-            {correctionError && <Alert variant="destructive"><AlertDescription>{correctionError}</AlertDescription></Alert>}
+            {correctionError && (
+              <Alert variant="destructive">
+                <AlertDescription>{correctionError}</AlertDescription>
+              </Alert>
+            )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCorrectionDialogOpen(false)} disabled={savingCorrection}>{t("cancel")}</Button>
+            <Button
+              variant="outline"
+              onClick={() => setCorrectionDialogOpen(false)}
+              disabled={savingCorrection}
+            >
+              {t("cancel")}
+            </Button>
             {correctionPlan ? (
               <>
-                <Button variant="outline" onClick={() => setCorrectionPlan(null)} disabled={savingCorrection}>{t("editCorrection")}</Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setCorrectionPlan(null)}
+                  disabled={savingCorrection}
+                >
+                  {t("editCorrection")}
+                </Button>
                 <Button onClick={() => void submitCorrection()} disabled={savingCorrection}>
                   {savingCorrection && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   {t("applyCorrection")}
                 </Button>
               </>
             ) : (
-              <Button onClick={() => void reviewCorrection()} disabled={savingCorrection || !correctionText.trim()}>
+              <Button
+                onClick={() => void reviewCorrection()}
+                disabled={savingCorrection || !correctionText.trim()}
+              >
                 {savingCorrection && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {t("reviewCorrection")}
               </Button>

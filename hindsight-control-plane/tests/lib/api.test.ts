@@ -261,4 +261,23 @@ describe("ControlPlaneClient peer direction routes", () => {
       "/api/banks/bank%2Fa/peers/observer%2Fa/corrections?target=target%2Fa",
     ]);
   });
+
+  it("returns the synchronous peer model produced by rebuild", async () => {
+    const rebuilt = {
+      id: "model-a",
+      bank_id: "bank-a",
+      observer_peer_id: "observer-a",
+      target_peer_id: "target-a",
+      version: 2,
+      card: [],
+      representation: "Updated model",
+      created_at: "2026-08-14T00:00:00Z",
+      updated_at: "2026-08-14T00:01:00Z",
+      source_cursor: null,
+      source_cursor_id: null,
+    };
+    fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify(rebuilt), { status: 200 }));
+
+    await expect(client.rebuildPeer("bank-a", "observer-a", "target-a")).resolves.toEqual(rebuilt);
+  });
 });

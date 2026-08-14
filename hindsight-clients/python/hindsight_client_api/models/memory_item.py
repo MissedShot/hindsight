@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
 from hindsight_client_api.models.entity_input import EntityInput
 from hindsight_client_api.models.observation_scopes import ObservationScopes
+from hindsight_client_api.models.retain_peer_context import RetainPeerContext
 from hindsight_client_api.models.timestamp import Timestamp
 from typing import Optional, Set
 from typing_extensions import Self
@@ -37,9 +38,10 @@ class MemoryItem(BaseModel):
     entities: Optional[List[EntityInput]] = None
     tags: Optional[List[StrictStr]] = None
     observation_scopes: Optional[ObservationScopes] = None
+    peer_context: Optional[RetainPeerContext] = None
     strategy: Optional[StrictStr] = None
     update_mode: Optional[StrictStr] = None
-    __properties: ClassVar[List[str]] = ["content", "timestamp", "context", "metadata", "document_id", "entities", "tags", "observation_scopes", "strategy", "update_mode"]
+    __properties: ClassVar[List[str]] = ["content", "timestamp", "context", "metadata", "document_id", "entities", "tags", "observation_scopes", "peer_context", "strategy", "update_mode"]
 
     @field_validator('update_mode')
     def update_mode_validate_enum(cls, value):
@@ -103,6 +105,9 @@ class MemoryItem(BaseModel):
         # override the default output from pydantic by calling `to_dict()` of observation_scopes
         if self.observation_scopes:
             _dict['observation_scopes'] = self.observation_scopes.to_dict()
+        # override the default output from pydantic by calling `to_dict()` of peer_context
+        if self.peer_context:
+            _dict['peer_context'] = self.peer_context.to_dict()
         # set to None if timestamp (nullable) is None
         # and model_fields_set contains the field
         if self.timestamp is None and "timestamp" in self.model_fields_set:
@@ -138,6 +143,11 @@ class MemoryItem(BaseModel):
         if self.observation_scopes is None and "observation_scopes" in self.model_fields_set:
             _dict['observation_scopes'] = None
 
+        # set to None if peer_context (nullable) is None
+        # and model_fields_set contains the field
+        if self.peer_context is None and "peer_context" in self.model_fields_set:
+            _dict['peer_context'] = None
+
         # set to None if strategy (nullable) is None
         # and model_fields_set contains the field
         if self.strategy is None and "strategy" in self.model_fields_set:
@@ -168,6 +178,7 @@ class MemoryItem(BaseModel):
             "entities": [EntityInput.from_dict(_item) for _item in obj["entities"]] if obj.get("entities") is not None else None,
             "tags": obj.get("tags"),
             "observation_scopes": ObservationScopes.from_dict(obj["observation_scopes"]) if obj.get("observation_scopes") is not None else None,
+            "peer_context": RetainPeerContext.from_dict(obj["peer_context"]) if obj.get("peer_context") is not None else None,
             "strategy": obj.get("strategy"),
             "update_mode": obj.get("update_mode")
         })

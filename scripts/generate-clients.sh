@@ -115,6 +115,17 @@ cd "$PYTHON_CLIENT_DIR"
 GEN_TMP_DIR="$(mktemp -d -t hindsight-py-gen.XXXXXX)"
 trap 'rm -rf "$GEN_TMP_DIR"' EXIT
 
+# openapi-generator 7.10 cannot consume OpenAPI 3.1's simple `T | null`
+# representation in every model graph. Keep the canonical 3.1 document intact
+# and adapt only the temporary Python-generator input.
+PYTHON_OPENAPI_SPEC="$GEN_TMP_DIR/openapi-python-generator.json"
+python3 "$SCRIPT_DIR/prepare_openapi_for_generator.py" \
+    "$OPENAPI_SPEC" \
+    "$PYTHON_OPENAPI_SPEC" \
+    --normalize-nullable \
+    --schema-prefix Peer \
+    --schema RetainPeerContext
+
 # Run openapi-generator via Docker (pinned version for reproducibility)
 # Use --platform linux/amd64 to ensure identical output on both macOS (arm64) and Linux CI (amd64)
 # Use --user to match current user's UID/GID so generated files are writable
@@ -124,9 +135,9 @@ trap 'rm -rf "$GEN_TMP_DIR"' EXIT
 docker run --rm \
     --platform linux/amd64 \
     --user "$(id -u):$(id -g)" \
-    -v "$OPENAPI_SPEC:/local/openapi.json" \
+    -v "$PYTHON_OPENAPI_SPEC:/local/openapi.json:ro" \
     -v "$GEN_TMP_DIR:/local/out" \
-    -v "$PYTHON_CLIENT_DIR/openapi-generator-config.yaml:/local/config.yaml" \
+    -v "$PYTHON_CLIENT_DIR/openapi-generator-config.yaml:/local/config.yaml:ro" \
     "openapitools/openapi-generator-cli:${OPENAPI_GENERATOR_VERSION}" generate \
     -i /local/openapi.json \
     -g python \
@@ -433,10 +444,16 @@ else
 
     # Generate new client via Docker (--platform linux/amd64 ensures identical output on macOS and Linux CI)
     echo "Generating client from OpenAPI spec..."
+    GO_OPENAPI_SPEC="$GEN_TMP_DIR/openapi-go-generator.json"
+    python3 "$SCRIPT_DIR/prepare_openapi_for_generator.py" \
+        "$OPENAPI_SPEC" \
+        "$GO_OPENAPI_SPEC" \
+        --prefix-enum-varnames \
+        --schema-prefix Peer
     docker run --rm \
         --platform linux/amd64 \
         --user "$(id -u):$(id -g)" \
-        -v "$OPENAPI_SPEC:/local/openapi.json" \
+        -v "$GO_OPENAPI_SPEC:/local/openapi.json:ro" \
         -v "$GO_CLIENT_DIR:/local/out" \
         "openapitools/openapi-generator-cli:${OPENAPI_GENERATOR_VERSION}" generate \
         -i /local/openapi.json \

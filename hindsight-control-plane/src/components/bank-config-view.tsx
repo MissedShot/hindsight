@@ -123,7 +123,6 @@ type RecallEdits = {
 
 type PeerModelingEdits = {
   enable_peer_modeling: boolean;
-
 };
 
 // ─── Gemini safety settings catalogue ────────────────────────────────────────
@@ -325,7 +324,6 @@ function recallSlice(overrides: Record<string, any>): RecallEdits {
 function peerModelingSlice(config: Record<string, any>): PeerModelingEdits {
   return {
     enable_peer_modeling: config.enable_peer_modeling === true,
-
   };
 }
 
@@ -429,10 +427,8 @@ export function BankConfigView({
     [recallEdits, baseOverrides]
   );
   const peerModelingDirty = useMemo(
-    () =>
-      JSON.stringify(peerModelingEdits) !== JSON.stringify(peerModelingSlice(baseConfig)),
+    () => JSON.stringify(peerModelingEdits) !== JSON.stringify(peerModelingSlice(baseConfig)),
     [peerModelingEdits, baseConfig]
-  );
   );
   useEffect(() => {
     if (bankId) loadAll();
@@ -624,7 +620,6 @@ export function BankConfigView({
       setPeerModelingError(err.message || t("observationsFailedToSave"));
     } finally {
       setPeerModelingSaving(false);
-
     }
   };
 

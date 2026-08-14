@@ -228,9 +228,10 @@ def _raise_peer_http_error(error: Exception) -> None:
         raise HTTPException(status_code=404, detail=str(error))
     if isinstance(error, PeerConflictError):
         raise HTTPException(status_code=409, detail=str(error))
-    if isinstance(error, PeerValidationError):
+    if isinstance(error, (PeerValidationError, ValueError)):
         raise HTTPException(status_code=400, detail=str(error))
     raise error
+
 
 # 499 is the de facto reverse-proxy status for "client closed request".
 _CLIENT_CLOSED_REQUEST_STATUS_CODE = 499
@@ -2682,6 +2683,23 @@ class BankTemplateConfig(BaseModel):
     )
     enable_observations: bool | None = Field(default=None, description="Toggle observation consolidation")
     observations_mission: str | None = Field(default=None, description="Controls what gets synthesised")
+    enable_peer_modeling: bool | None = Field(default=None, description="Enable directional peer modeling")
+    enable_auto_peer_modeling: bool | None = Field(
+        default=None, description="Automatically schedule peer modeling after attributed retains"
+    )
+    peer_model_min_new_facts: int | None = Field(
+        default=None, description="Minimum new facts before automatic peer modeling"
+    )
+    peer_model_cooldown_seconds: int | None = Field(
+        default=None, description="Minimum seconds between automatic peer modeling runs"
+    )
+    peer_model_max_card_entries: int | None = Field(default=None, description="Maximum entries retained in a peer card")
+    peer_model_min_pattern_sources: int | None = Field(
+        default=None, description="Minimum pattern sources required for peer modeling"
+    )
+    peer_model_representation_max_tokens: int | None = Field(
+        default=None, description="Maximum tokens for a materialized peer representation"
+    )
     enable_temporal_retrieval: bool | None = Field(
         default=None, description="Toggle the temporal arm (and its date-aware query analysis) during recall"
     )
@@ -7111,9 +7129,7 @@ def _register_routes(app: FastAPI):
         request_context: RequestContext = Depends(get_request_context),
     ):
         try:
-            peer = await app.state.memory.update_peer(
-                bank_id, peer_id, payload, request_context=request_context
-            )
+            peer = await app.state.memory.update_peer(bank_id, peer_id, payload, request_context=request_context)
             if peer is None:
                 raise HTTPException(status_code=404, detail=f"Peer '{peer_id}' not found")
             return peer

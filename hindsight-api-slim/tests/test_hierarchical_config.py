@@ -800,8 +800,12 @@ async def test_config_get_bank_config_no_static_or_credential_fields_leak(memory
         for field in expected_configurable:
             assert field in config, f"Expected configurable field '{field}' missing from config"
 
-        # Should have a small number of configurable fields (not hundreds)
-        assert len(config) < 50, f"Too many fields returned: {len(config)}"
+        # The response cannot exceed the complete safe configurable surface; this
+        # remains valid as legitimate configurable fields are added over time.
+        safe_configurable_fields = configurable_fields - credential_fields
+        assert len(config) <= len(safe_configurable_fields), (
+            f"Too many fields returned: {len(config)} > safe configurable surface of {len(safe_configurable_fields)}"
+        )
 
     finally:
         await memory.delete_bank(bank_id, request_context=request_context)

@@ -31,6 +31,7 @@ from hindsight_client_api.api.memory_api import MemoryApi
 from hindsight_client_api.api.mental_models_api import MentalModelsApi
 from hindsight_client_api.api.monitoring_api import MonitoringApi
 from hindsight_client_api.api.operations_api import OperationsApi
+from hindsight_client_api.api.peer_modeling_api import PeerModelingApi
 from hindsight_client_api.api.webhooks_api import WebhooksApi
 
 # import ApiClient
@@ -156,6 +157,30 @@ from hindsight_client_api.models.operation_progress import OperationProgress
 from hindsight_client_api.models.operation_response import OperationResponse
 from hindsight_client_api.models.operation_status_response import OperationStatusResponse
 from hindsight_client_api.models.operations_list_response import OperationsListResponse
+from hindsight_client_api.models.peer import Peer
+from hindsight_client_api.models.peer_card import PeerCard
+from hindsight_client_api.models.peer_card_entry import PeerCardEntry
+from hindsight_client_api.models.peer_claim import PeerClaim
+from hindsight_client_api.models.peer_claim_draft import PeerClaimDraft
+from hindsight_client_api.models.peer_claim_origin import PeerClaimOrigin
+from hindsight_client_api.models.peer_claim_status import PeerClaimStatus
+from hindsight_client_api.models.peer_claim_type import PeerClaimType
+from hindsight_client_api.models.peer_claims import PeerClaims
+from hindsight_client_api.models.peer_context import PeerContext
+from hindsight_client_api.models.peer_correction_apply_request import PeerCorrectionApplyRequest
+from hindsight_client_api.models.peer_correction_claim_draft import PeerCorrectionClaimDraft
+from hindsight_client_api.models.peer_correction_plan_input import PeerCorrectionPlanInput
+from hindsight_client_api.models.peer_correction_plan_output import PeerCorrectionPlanOutput
+from hindsight_client_api.models.peer_correction_request import PeerCorrectionRequest
+from hindsight_client_api.models.peer_correction_result import PeerCorrectionResult
+from hindsight_client_api.models.peer_create import PeerCreate
+from hindsight_client_api.models.peer_list import PeerList
+from hindsight_client_api.models.peer_model import PeerModel
+from hindsight_client_api.models.peer_model_request import PeerModelRequest
+from hindsight_client_api.models.peer_operation import PeerOperation
+from hindsight_client_api.models.peer_source import PeerSource
+from hindsight_client_api.models.peer_source_kind import PeerSourceKind
+from hindsight_client_api.models.peer_update import PeerUpdate
 from hindsight_client_api.models.recall_request import RecallRequest
 from hindsight_client_api.models.recall_response import RecallResponse
 from hindsight_client_api.models.recall_result import RecallResult
@@ -172,6 +197,7 @@ from hindsight_client_api.models.reflect_response import ReflectResponse
 from hindsight_client_api.models.reflect_tool_call import ReflectToolCall
 from hindsight_client_api.models.reflect_trace import ReflectTrace
 from hindsight_client_api.models.reprocess_document_response import ReprocessDocumentResponse
+from hindsight_client_api.models.retain_peer_context import RetainPeerContext
 from hindsight_client_api.models.retain_request import RetainRequest
 from hindsight_client_api.models.retain_response import RetainResponse
 from hindsight_client_api.models.retry_operation_response import RetryOperationResponse

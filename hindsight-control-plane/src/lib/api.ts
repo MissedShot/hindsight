@@ -108,6 +108,20 @@ export interface PeerOperationResponse {
   [key: string]: unknown;
 }
 
+export interface PeerModel {
+  id: string;
+  bank_id: string;
+  observer_peer_id: string;
+  target_peer_id: string;
+  version: number;
+  card: PeerCardEntry[];
+  representation: string;
+  created_at: string;
+  updated_at: string;
+  source_cursor?: string | null;
+  source_cursor_id?: string | null;
+}
+
 export interface PeerCorrectionClaimDraft {
   claim_type: PeerClaimCategory;
   text: string;
@@ -2092,7 +2106,9 @@ export class ControlPlaneClient {
    * `{items}` shape and the simpler `{peers}` shape used by early dataplane
    * implementations so the UI remains compatible while the SDK is generated.
    */
-  async listPeers(bankId: string): Promise<{ items?: Peer[]; peers?: Peer[]; total?: number } | Peer[]> {
+  async listPeers(
+    bankId: string
+  ): Promise<{ items?: Peer[]; peers?: Peer[]; total?: number } | Peer[]> {
     return this.fetchApi<{ items?: Peer[]; peers?: Peer[]; total?: number } | Peer[]>(
       bankApi(bankId, "/peers")
     );
@@ -2164,7 +2180,11 @@ export class ControlPlaneClient {
     );
   }
 
-  async modelPeer(bankId: string, observerId: string, targetId: string): Promise<PeerOperationResponse> {
+  async modelPeer(
+    bankId: string,
+    observerId: string,
+    targetId: string
+  ): Promise<PeerOperationResponse> {
     return this.fetchApi<PeerOperationResponse>(
       bankApi(
         bankId,
@@ -2174,12 +2194,8 @@ export class ControlPlaneClient {
     );
   }
 
-  async rebuildPeer(
-    bankId: string,
-    observerId: string,
-    targetId: string
-  ): Promise<PeerOperationResponse> {
-    return this.fetchApi<PeerOperationResponse>(
+  async rebuildPeer(bankId: string, observerId: string, targetId: string): Promise<PeerModel> {
+    return this.fetchApi<PeerModel>(
       bankApi(
         bankId,
         `/peers/${encodeURIComponent(observerId)}/rebuild?target=${encodeURIComponent(targetId)}`

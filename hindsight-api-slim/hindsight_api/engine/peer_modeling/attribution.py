@@ -81,7 +81,7 @@ async def persist_memory_peer_roles(
             for role, reference in refs:
                 await conn.execute(
                     f"""
-                    INSERT INTO {fq_table('memory_peer_roles')}
+                    INSERT INTO {fq_table("memory_peer_roles")}
                         (id, bank_id, memory_unit_id, peer_id, role, explicit, modality,
                          source_message_id, session_id)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)

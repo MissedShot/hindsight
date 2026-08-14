@@ -579,7 +579,10 @@ async def _insert_facts_and_links(
     # an IndexError (see issue #1037).
     result_unit_ids = _map_results_to_contents(contents, processed_facts, unit_ids if unit_ids else [])
 
-    if config.enable_peer_modeling:
+    # This low-level helper is also used by legacy import/tests with partial
+    # config objects.  Only an explicitly enabled resolved config may write
+    # peer attribution; missing or mock-only values fail closed.
+    if getattr(config, "enable_peer_modeling", False) is True:
         from hindsight_api.engine.peer_modeling.attribution import persist_memory_peer_roles
 
         peer_role_count = await persist_memory_peer_roles(conn, bank_id, contents, result_unit_ids)

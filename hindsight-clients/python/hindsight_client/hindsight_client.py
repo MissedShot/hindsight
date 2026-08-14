@@ -526,6 +526,7 @@ class Hindsight:
         fact_types: list[str] | None = None,
         exclude_mental_models: bool = False,
         exclude_mental_model_ids: list[str] | None = None,
+        apply_all_directives: bool = False,
     ) -> ReflectResponse:
         """
         Generate a contextual answer based on bank identity and memories (sync wrapper — prefer :meth:`areflect` in async code).
@@ -555,6 +556,7 @@ class Hindsight:
             fact_types: Optional list of fact types to include (world, experience, observation).
             exclude_mental_models: If True, exclude all mental models from reflection (default: False).
             exclude_mental_model_ids: Optional list of specific mental model IDs to exclude.
+            apply_all_directives: If True, apply every active directive regardless of tags (default: False).
 
         Returns:
             ReflectResponse with answer text, optionally facts used, optionally a 'trace' with
@@ -578,6 +580,7 @@ class Hindsight:
                 fact_types=fact_types,
                 exclude_mental_models=exclude_mental_models,
                 exclude_mental_model_ids=exclude_mental_model_ids,
+                apply_all_directives=apply_all_directives,
             )
         )
 
@@ -1098,6 +1101,7 @@ class Hindsight:
         fact_types: list[str] | None = None,
         exclude_mental_models: bool = False,
         exclude_mental_model_ids: list[str] | None = None,
+        apply_all_directives: bool = False,
     ) -> ReflectResponse:
         """
         Generate a contextual answer based on bank identity and memories (async — preferred over :meth:`reflect`).
@@ -1127,6 +1131,7 @@ class Hindsight:
             fact_types: Optional list of fact types to include (world, experience, observation).
             exclude_mental_models: If True, exclude all mental models from reflection (default: False).
             exclude_mental_model_ids: Optional list of specific mental model IDs to exclude.
+            apply_all_directives: If True, apply every active directive regardless of tags (default: False).
 
         Returns:
             ReflectResponse with answer text, optionally facts used, optionally a 'trace' with
@@ -1156,6 +1161,7 @@ class Hindsight:
             tags_match=tags_match,
             include=include,
             tag_groups=tag_groups_objs,
+            apply_all_directives=apply_all_directives,
             fact_types=fact_types,
             exclude_mental_models=exclude_mental_models or None,
             exclude_mental_model_ids=exclude_mental_model_ids,

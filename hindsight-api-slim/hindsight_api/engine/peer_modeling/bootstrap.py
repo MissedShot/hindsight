@@ -261,7 +261,10 @@ async def _discover_peers(
         if isinstance(result, _DiscoveryResult) and result.peers:
             return result
     except Exception as exc:
-        logger.warning("[PEER_BOOTSTRAP] discovery LLM failed; using metadata fallback: %s", exc)
+        logger.warning(
+            "[PEER_BOOTSTRAP] discovery LLM failed; using metadata fallback (error_type=%s)",
+            type(exc).__name__,
+        )
     return fallback
 
 
@@ -679,7 +682,7 @@ async def run_peer_bootstrap(
     async with acquire_with_retry(backend) as conn:
         rows_raw = await conn.fetch(
             f"""
-            SELECT id, text, context, metadata, fact_type, mentioned_at
+            SELECT id, text, context, metadata, fact_type, mentioned_at, updated_at
             FROM {fq_table("memory_units")}
             WHERE bank_id = $1
               AND fact_type = 'observation'
@@ -690,7 +693,7 @@ async def run_peer_bootstrap(
         if not rows_raw:
             rows_raw = await conn.fetch(
                 f"""
-                SELECT id, text, context, metadata, fact_type, mentioned_at
+                SELECT id, text, context, metadata, fact_type, mentioned_at, updated_at
                 FROM {fq_table("memory_units")}
                 WHERE bank_id = $1
                   AND fact_type IN ('world', 'experience')
@@ -699,6 +702,7 @@ async def run_peer_bootstrap(
                 bank_id,
             )
     rows = [dict(row) for row in rows_raw]
+    source_versions = {str(row["id"]): row["updated_at"] for row in rows}
     if not rows:
         result = {
             "status": "completed",
@@ -850,11 +854,15 @@ async def run_peer_bootstrap(
                 )
             )
         if drafts:
+            materialize_sources = list(dict.fromkeys(source_id for claim in drafts for source_id in claim.source_ids))
             model = await service.model(
                 bank_id,
                 observer.id,
                 peer.id,
                 PeerModelRequest(claims=drafts),
+                validate_bank_sources=materialize_sources,
+                expected_source_versions={source_id: source_versions[source_id] for source_id in materialize_sources},
+                validate_existing_sources=True,
             )
             claims_materialized += len(drafts)
             card_entries += len(model.card.entries)

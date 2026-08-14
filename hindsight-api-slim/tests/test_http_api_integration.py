@@ -1472,9 +1472,12 @@ async def test_patch_config_does_not_apply_client_field_permissions_to_projected
     )
 
     assert response.status_code == 200, response.text
-    # The two lookups authorize the client update and filter the response.
-    # Projecting the server default must not add a third field-permission check.
-    assert tenant_extension.get_allowed_config_fields.await_count == 2
+    # The peer-aware update reads the pre-update state so it can detect the
+    # enablement transition that triggers bootstrap. Together with the update
+    # authorization and response filtering, that is three permission lookups.
+    # The server-owned default projection is outside this count and must not
+    # perform a client field-permission check of its own.
+    assert tenant_extension.get_allowed_config_fields.await_count == 3
     overrides = await memory._config_resolver._load_bank_config(bank_id)
     assert overrides == {"enable_observations": True}
 

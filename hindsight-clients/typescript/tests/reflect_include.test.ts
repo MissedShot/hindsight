@@ -32,6 +32,17 @@ describe("reflect include options", () => {
   test("no include flags omits include", async () => {
     await makeClient().reflect("bank", "query");
     expect(capturedInclude(spy)).toBeUndefined();
+    expect((spy.mock.calls[0][0] as any).body.apply_all_directives).toBeUndefined();
+  });
+
+  test("applyAllDirectives maps to apply_all_directives", async () => {
+    await makeClient().reflect("bank", "query", { applyAllDirectives: true });
+    expect((spy.mock.calls[0][0] as any).body.apply_all_directives).toBe(true);
+  });
+
+  test("applyAllDirectives preserves false", async () => {
+    await makeClient().reflect("bank", "query", { applyAllDirectives: false });
+    expect((spy.mock.calls[0][0] as any).body.apply_all_directives).toBe(false);
   });
 
   test("includeToolCalls sets tool_calls with output on by default", async () => {

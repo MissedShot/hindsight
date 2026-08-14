@@ -2661,6 +2661,25 @@ class MemoryEngine(MemoryEngineInterface):
         if operation_kind == PeerModelOperationKind.REBUILD:
             model = await service.rebuild(bank_id, observer_peer_id, target_peer_id, payload)
         else:
+            source_ids = list(
+                dict.fromkeys(
+                    source_id for claim in (payload.claims if payload else []) for source_id in claim.source_ids
+                )
+            )
+            expected_versions: dict[str, datetime] = {}
+            if source_ids:
+                backend = await self._get_backend()
+                async with acquire_with_retry(backend) as conn:
+                    rows = await conn.fetch(
+                        f"""
+                        SELECT id, updated_at
+                        FROM {fq_table("memory_units")}
+                        WHERE bank_id = $1 AND id = ANY($2::uuid[])
+                        """,
+                        bank_id,
+                        source_ids,
+                    )
+                expected_versions = {str(row["id"]): row["updated_at"] for row in rows}
             model = await service.model(
                 bank_id,
                 observer_peer_id,
@@ -2668,6 +2687,9 @@ class MemoryEngine(MemoryEngineInterface):
                 payload,
                 source_cursor=auto_source_cursor,
                 source_cursor_id=str(auto_source_cursor_id) if auto_source_cursor_id else None,
+                validate_bank_sources=source_ids or None,
+                expected_source_versions=expected_versions or None,
+                validate_existing_sources=True,
             )
 
         outcome = PeerMaterializationResult(

@@ -1930,7 +1930,6 @@ async def _trigger_peer_model_refreshes(
     return not result.get("deduplicated", False)
 
 
-
 async def _trigger_mental_model_refreshes(
     memory_engine: "MemoryEngine",
     bank_id: str,

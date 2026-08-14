@@ -28,7 +28,18 @@ async def test_areflect_no_includes_by_default():
     client._memory_api.reflect = AsyncMock()
 
     await client.areflect("bank", "query")
+    request = client._memory_api.reflect.call_args.args[1]
+    assert request.apply_all_directives is False
     assert _captured_include(client._memory_api.reflect) is None
+
+
+async def test_areflect_apply_all_directives_forwards_true():
+    """apply_all_directives=True should reach the generated reflect request."""
+    client = _make_client()
+    client._memory_api.reflect = AsyncMock()
+
+    await client.areflect("bank", "query", apply_all_directives=True)
+    assert client._memory_api.reflect.call_args.args[1].apply_all_directives is True
 
 
 async def test_areflect_include_tool_calls_sets_trace_request():
@@ -86,3 +97,12 @@ def test_reflect_sync_forwards_include_tool_calls():
     assert include is not None
     assert include.tool_calls is not None
     assert include.tool_calls.output is True
+
+
+def test_reflect_sync_forwards_apply_all_directives():
+    """The sync wrapper should forward apply_all_directives through to the request."""
+    client = _make_client()
+    client._memory_api.reflect = AsyncMock()
+
+    client.reflect("bank", "query", apply_all_directives=True)
+    assert client._memory_api.reflect.call_args.args[1].apply_all_directives is True

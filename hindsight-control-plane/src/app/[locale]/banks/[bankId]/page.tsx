@@ -742,30 +742,14 @@ export default function BankPage() {
                 </div>
               )}
 
-              {/* Documents Tab — DocumentsView renders its own title row so the
-                Export/Import Actions menu can sit beside the heading. */}
-              {view === "documents" && (
-                <div>
-                  <DocumentsView />
-                </div>
-              )}
-
               {/* Peers Tab */}
               {view === "peers" && <PeersView enabled={peerModelingEnabled} />}
-
-              {/* Entities Tab */}
-              {view === "entities" && (
-                <div>
-                  <h1 className="text-3xl font-bold mb-2 text-foreground">{t("entities")}</h1>
-                  <p className="text-muted-foreground mb-6">{t("entitiesDescription")}</p>
-                  <EntitiesView />
-                </div>
-              )}
 
               {/* Home Tab — bank dashboard. */}
               {view === "home" && bankId && (
                 <HomeView bankId={bankId} onNavigate={(tab) => handleTabChange(tab as NavItem)} />
               )}
+            </div>
           </div>
         </main>
       </div>

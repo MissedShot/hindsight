@@ -14,6 +14,9 @@ import type {
   AuditLogStatsData,
   AuditLogStatsErrors,
   AuditLogStatsResponses,
+  BootstrapPeersData,
+  BootstrapPeersErrors,
+  BootstrapPeersResponses,
   CancelOperationData,
   CancelOperationErrors,
   CancelOperationResponses,
@@ -29,6 +32,9 @@ import type {
   ClearObservationsData,
   ClearObservationsErrors,
   ClearObservationsResponses,
+  CorrectPeerModelData,
+  CorrectPeerModelErrors,
+  CorrectPeerModelResponses,
   CreateDirectiveData,
   CreateDirectiveErrors,
   CreateDirectiveResponses,
@@ -44,6 +50,9 @@ import type {
   CreateOrUpdateBankData,
   CreateOrUpdateBankErrors,
   CreateOrUpdateBankResponses,
+  CreatePeerData,
+  CreatePeerErrors,
+  CreatePeerResponses,
   CreateWebhookData,
   CreateWebhookErrors,
   CreateWebhookResponses,
@@ -147,6 +156,15 @@ import type {
   GetOperationStatusData,
   GetOperationStatusErrors,
   GetOperationStatusResponses,
+  GetPeerClaimsData,
+  GetPeerClaimsErrors,
+  GetPeerClaimsResponses,
+  GetPeerContextData,
+  GetPeerContextErrors,
+  GetPeerContextResponses,
+  GetPeerData,
+  GetPeerErrors,
+  GetPeerResponses,
   GetReadinessData,
   GetReadinessResponses,
   GetVersionData,
@@ -192,6 +210,9 @@ import type {
   ListOperationsData,
   ListOperationsErrors,
   ListOperationsResponses,
+  ListPeersData,
+  ListPeersErrors,
+  ListPeersResponses,
   ListTagsData,
   ListTagsErrors,
   ListTagsResponses,
@@ -206,6 +227,15 @@ import type {
   LlmRequestStatsResponses,
   MetricsEndpointMetricsGetData,
   MetricsEndpointMetricsGetResponses,
+  ModelPeerData,
+  ModelPeerErrors,
+  ModelPeerResponses,
+  PlanPeerCorrectionData,
+  PlanPeerCorrectionErrors,
+  PlanPeerCorrectionResponses,
+  RebuildPeerModelData,
+  RebuildPeerModelErrors,
+  RebuildPeerModelResponses,
   RecallMemoriesData,
   RecallMemoriesErrors,
   RecallMemoriesResponses,
@@ -266,6 +296,9 @@ import type {
   UpdateMentalModelData,
   UpdateMentalModelErrors,
   UpdateMentalModelResponses,
+  UpdatePeerData,
+  UpdatePeerErrors,
+  UpdatePeerResponses,
   UpdateWebhookData,
   UpdateWebhookErrors,
   UpdateWebhookResponses,
@@ -1238,6 +1271,157 @@ export const createOrUpdateBank = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({
     url: "/v1/default/banks/{bank_id}",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Api List Peers
+ */
+export const listPeers = <ThrowOnError extends boolean = false>(
+  options: Options<ListPeersData, ThrowOnError>
+) =>
+  (options.client ?? client).get<ListPeersResponses, ListPeersErrors, ThrowOnError>({
+    url: "/v1/default/banks/{bank_id}/peers",
+    ...options,
+  });
+
+/**
+ * Api Create Peer
+ */
+export const createPeer = <ThrowOnError extends boolean = false>(
+  options: Options<CreatePeerData, ThrowOnError>
+) =>
+  (options.client ?? client).post<CreatePeerResponses, CreatePeerErrors, ThrowOnError>({
+    url: "/v1/default/banks/{bank_id}/peers",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Api Bootstrap Peers
+ *
+ * Discover peers and build directional cards from existing bank evidence.
+ */
+export const bootstrapPeers = <ThrowOnError extends boolean = false>(
+  options: Options<BootstrapPeersData, ThrowOnError>
+) =>
+  (options.client ?? client).post<BootstrapPeersResponses, BootstrapPeersErrors, ThrowOnError>({
+    url: "/v1/default/banks/{bank_id}/peers/bootstrap",
+    ...options,
+  });
+
+/**
+ * Api Get Peer
+ */
+export const getPeer = <ThrowOnError extends boolean = false>(
+  options: Options<GetPeerData, ThrowOnError>
+) =>
+  (options.client ?? client).get<GetPeerResponses, GetPeerErrors, ThrowOnError>({
+    url: "/v1/default/banks/{bank_id}/peers/{peer_id}",
+    ...options,
+  });
+
+/**
+ * Api Update Peer
+ */
+export const updatePeer = <ThrowOnError extends boolean = false>(
+  options: Options<UpdatePeerData, ThrowOnError>
+) =>
+  (options.client ?? client).patch<UpdatePeerResponses, UpdatePeerErrors, ThrowOnError>({
+    url: "/v1/default/banks/{bank_id}/peers/{peer_id}",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Api Get Peer Context
+ */
+export const getPeerContext = <ThrowOnError extends boolean = false>(
+  options: Options<GetPeerContextData, ThrowOnError>
+) =>
+  (options.client ?? client).get<GetPeerContextResponses, GetPeerContextErrors, ThrowOnError>({
+    url: "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/context/{target_peer_id}",
+    ...options,
+  });
+
+/**
+ * Api Get Peer Claims
+ */
+export const getPeerClaims = <ThrowOnError extends boolean = false>(
+  options: Options<GetPeerClaimsData, ThrowOnError>
+) =>
+  (options.client ?? client).get<GetPeerClaimsResponses, GetPeerClaimsErrors, ThrowOnError>({
+    url: "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/claims/{target_peer_id}",
+    ...options,
+  });
+
+/**
+ * Api Model Peer
+ */
+export const modelPeer = <ThrowOnError extends boolean = false>(
+  options: Options<ModelPeerData, ThrowOnError>
+) =>
+  (options.client ?? client).post<ModelPeerResponses, ModelPeerErrors, ThrowOnError>({
+    url: "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/model/{target_peer_id}",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Api Rebuild Peer Model
+ */
+export const rebuildPeerModel = <ThrowOnError extends boolean = false>(
+  options: Options<RebuildPeerModelData, ThrowOnError>
+) =>
+  (options.client ?? client).post<RebuildPeerModelResponses, RebuildPeerModelErrors, ThrowOnError>({
+    url: "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/rebuild/{target_peer_id}",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Api Plan Peer Correction
+ */
+export const planPeerCorrection = <ThrowOnError extends boolean = false>(
+  options: Options<PlanPeerCorrectionData, ThrowOnError>
+) =>
+  (options.client ?? client).post<
+    PlanPeerCorrectionResponses,
+    PlanPeerCorrectionErrors,
+    ThrowOnError
+  >({
+    url: "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/corrections/{target_peer_id}/plan",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Api Correct Peer Model
+ */
+export const correctPeerModel = <ThrowOnError extends boolean = false>(
+  options: Options<CorrectPeerModelData, ThrowOnError>
+) =>
+  (options.client ?? client).post<CorrectPeerModelResponses, CorrectPeerModelErrors, ThrowOnError>({
+    url: "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/corrections/{target_peer_id}",
     ...options,
     headers: {
       "Content-Type": "application/json",

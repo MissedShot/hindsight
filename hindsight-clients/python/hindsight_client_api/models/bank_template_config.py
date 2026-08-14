@@ -36,6 +36,13 @@ class BankTemplateConfig(BaseModel):
     retain_structured_chunk_size: Optional[StrictInt] = None
     enable_observations: Optional[StrictBool] = None
     observations_mission: Optional[StrictStr] = None
+    enable_peer_modeling: Optional[StrictBool] = None
+    enable_auto_peer_modeling: Optional[StrictBool] = None
+    peer_model_min_new_facts: Optional[StrictInt] = None
+    peer_model_cooldown_seconds: Optional[StrictInt] = None
+    peer_model_max_card_entries: Optional[StrictInt] = None
+    peer_model_min_pattern_sources: Optional[StrictInt] = None
+    peer_model_representation_max_tokens: Optional[StrictInt] = None
     enable_temporal_retrieval: Optional[StrictBool] = None
     enable_graph_retrieval: Optional[StrictBool] = None
     enable_reranking: Optional[StrictBool] = None
@@ -73,7 +80,7 @@ class BankTemplateConfig(BaseModel):
     recall_max_tokens: Optional[StrictInt] = None
     recall_chunks_max_tokens: Optional[StrictInt] = None
     memory_defense: Optional[Dict[str, Any]] = None
-    __properties: ClassVar[List[str]] = ["reflect_mission", "retain_mission", "retain_extraction_mode", "retain_custom_instructions", "retain_chunk_size", "retain_structured_chunk_size", "enable_observations", "observations_mission", "enable_temporal_retrieval", "enable_graph_retrieval", "enable_reranking", "disposition_skepticism", "disposition_literalism", "disposition_empathy", "entity_labels", "entities_allow_free_form", "retain_default_strategy", "retain_strategies", "retain_chunk_batch_size", "mcp_enabled_tools", "consolidation_llm_batch_size", "consolidation_source_facts_max_tokens", "consolidation_source_facts_max_tokens_per_observation", "max_observations_per_scope", "observation_scope_limits", "reflect_source_facts_max_tokens", "llm_gemini_safety_settings", "recall_budget_function", "recall_budget_fixed_low", "recall_budget_fixed_mid", "recall_budget_fixed_high", "recall_budget_adaptive_low", "recall_budget_adaptive_mid", "recall_budget_adaptive_high", "recall_budget_min", "recall_budget_max", "audit_log_enabled", "store_document_text", "enable_auto_consolidation", "consolidation_max_memories_per_round", "consolidation_llm_parallelism", "recall_include_chunks", "recall_max_tokens", "recall_chunks_max_tokens", "memory_defense"]
+    __properties: ClassVar[List[str]] = ["reflect_mission", "retain_mission", "retain_extraction_mode", "retain_custom_instructions", "retain_chunk_size", "retain_structured_chunk_size", "enable_observations", "observations_mission", "enable_peer_modeling", "enable_auto_peer_modeling", "peer_model_min_new_facts", "peer_model_cooldown_seconds", "peer_model_max_card_entries", "peer_model_min_pattern_sources", "peer_model_representation_max_tokens", "enable_temporal_retrieval", "enable_graph_retrieval", "enable_reranking", "disposition_skepticism", "disposition_literalism", "disposition_empathy", "entity_labels", "entities_allow_free_form", "retain_default_strategy", "retain_strategies", "retain_chunk_batch_size", "mcp_enabled_tools", "consolidation_llm_batch_size", "consolidation_source_facts_max_tokens", "consolidation_source_facts_max_tokens_per_observation", "max_observations_per_scope", "observation_scope_limits", "reflect_source_facts_max_tokens", "llm_gemini_safety_settings", "recall_budget_function", "recall_budget_fixed_low", "recall_budget_fixed_mid", "recall_budget_fixed_high", "recall_budget_adaptive_low", "recall_budget_adaptive_mid", "recall_budget_adaptive_high", "recall_budget_min", "recall_budget_max", "audit_log_enabled", "store_document_text", "enable_auto_consolidation", "consolidation_max_memories_per_round", "consolidation_llm_parallelism", "recall_include_chunks", "recall_max_tokens", "recall_chunks_max_tokens", "memory_defense"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -160,6 +167,41 @@ class BankTemplateConfig(BaseModel):
         # and model_fields_set contains the field
         if self.observations_mission is None and "observations_mission" in self.model_fields_set:
             _dict['observations_mission'] = None
+
+        # set to None if enable_peer_modeling (nullable) is None
+        # and model_fields_set contains the field
+        if self.enable_peer_modeling is None and "enable_peer_modeling" in self.model_fields_set:
+            _dict['enable_peer_modeling'] = None
+
+        # set to None if enable_auto_peer_modeling (nullable) is None
+        # and model_fields_set contains the field
+        if self.enable_auto_peer_modeling is None and "enable_auto_peer_modeling" in self.model_fields_set:
+            _dict['enable_auto_peer_modeling'] = None
+
+        # set to None if peer_model_min_new_facts (nullable) is None
+        # and model_fields_set contains the field
+        if self.peer_model_min_new_facts is None and "peer_model_min_new_facts" in self.model_fields_set:
+            _dict['peer_model_min_new_facts'] = None
+
+        # set to None if peer_model_cooldown_seconds (nullable) is None
+        # and model_fields_set contains the field
+        if self.peer_model_cooldown_seconds is None and "peer_model_cooldown_seconds" in self.model_fields_set:
+            _dict['peer_model_cooldown_seconds'] = None
+
+        # set to None if peer_model_max_card_entries (nullable) is None
+        # and model_fields_set contains the field
+        if self.peer_model_max_card_entries is None and "peer_model_max_card_entries" in self.model_fields_set:
+            _dict['peer_model_max_card_entries'] = None
+
+        # set to None if peer_model_min_pattern_sources (nullable) is None
+        # and model_fields_set contains the field
+        if self.peer_model_min_pattern_sources is None and "peer_model_min_pattern_sources" in self.model_fields_set:
+            _dict['peer_model_min_pattern_sources'] = None
+
+        # set to None if peer_model_representation_max_tokens (nullable) is None
+        # and model_fields_set contains the field
+        if self.peer_model_representation_max_tokens is None and "peer_model_representation_max_tokens" in self.model_fields_set:
+            _dict['peer_model_representation_max_tokens'] = None
 
         # set to None if enable_temporal_retrieval (nullable) is None
         # and model_fields_set contains the field
@@ -366,6 +408,13 @@ class BankTemplateConfig(BaseModel):
             "retain_structured_chunk_size": obj.get("retain_structured_chunk_size"),
             "enable_observations": obj.get("enable_observations"),
             "observations_mission": obj.get("observations_mission"),
+            "enable_peer_modeling": obj.get("enable_peer_modeling"),
+            "enable_auto_peer_modeling": obj.get("enable_auto_peer_modeling"),
+            "peer_model_min_new_facts": obj.get("peer_model_min_new_facts"),
+            "peer_model_cooldown_seconds": obj.get("peer_model_cooldown_seconds"),
+            "peer_model_max_card_entries": obj.get("peer_model_max_card_entries"),
+            "peer_model_min_pattern_sources": obj.get("peer_model_min_pattern_sources"),
+            "peer_model_representation_max_tokens": obj.get("peer_model_representation_max_tokens"),
             "enable_temporal_retrieval": obj.get("enable_temporal_retrieval"),
             "enable_graph_retrieval": obj.get("enable_graph_retrieval"),
             "enable_reranking": obj.get("enable_reranking"),

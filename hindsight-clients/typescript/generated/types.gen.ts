@@ -501,6 +501,48 @@ export type BankTemplateConfig = {
    */
   observations_mission?: string | null;
   /**
+   * Enable Peer Modeling
+   *
+   * Enable directional peer modeling
+   */
+  enable_peer_modeling?: boolean | null;
+  /**
+   * Enable Auto Peer Modeling
+   *
+   * Automatically schedule peer modeling after attributed retains
+   */
+  enable_auto_peer_modeling?: boolean | null;
+  /**
+   * Peer Model Min New Facts
+   *
+   * Minimum new facts before automatic peer modeling
+   */
+  peer_model_min_new_facts?: number | null;
+  /**
+   * Peer Model Cooldown Seconds
+   *
+   * Minimum seconds between automatic peer modeling runs
+   */
+  peer_model_cooldown_seconds?: number | null;
+  /**
+   * Peer Model Max Card Entries
+   *
+   * Maximum entries retained in a peer card
+   */
+  peer_model_max_card_entries?: number | null;
+  /**
+   * Peer Model Min Pattern Sources
+   *
+   * Minimum pattern sources required for peer modeling
+   */
+  peer_model_min_pattern_sources?: number | null;
+  /**
+   * Peer Model Representation Max Tokens
+   *
+   * Maximum tokens for a materialized peer representation
+   */
+  peer_model_representation_max_tokens?: number | null;
+  /**
    * Enable Temporal Retrieval
    *
    * Toggle the temporal arm (and its date-aware query analysis) during recall
@@ -2031,6 +2073,12 @@ export type FeaturesInfo = {
    */
   observations: boolean;
   /**
+   * Peer Modeling
+   *
+   * Whether directional peer cards and representations are enabled
+   */
+  peer_modeling: boolean;
+  /**
    * Mcp
    *
    * Whether MCP (Model Context Protocol) server is enabled
@@ -2992,6 +3040,10 @@ export type MemoryItem = {
     | "shared"
     | Array<Array<string>>
     | null;
+  /**
+   * Explicit observer/speaker/subject attribution for native peer modeling. Peer modeling must be enabled and referenced peers must exist in this bank.
+   */
+  peer_context?: RetainPeerContext | null;
   /**
    * Strategy
    *
@@ -3985,6 +4037,560 @@ export type OperationsListResponse = {
 };
 
 /**
+ * Peer
+ *
+ * A peer identity scoped to exactly one bank.
+ */
+export type Peer = {
+  /**
+   * Id
+   */
+  id: string;
+  /**
+   * Bank Id
+   */
+  bank_id: string;
+  /**
+   * External Id
+   */
+  external_id: string;
+  /**
+   * Display Name
+   */
+  display_name: string | null;
+  /**
+   * Kind
+   */
+  kind: string;
+  /**
+   * Metadata
+   */
+  metadata: {
+    [key: string]: unknown;
+  };
+  /**
+   * Created At
+   */
+  created_at: string;
+  /**
+   * Updated At
+   */
+  updated_at: string;
+};
+
+/**
+ * PeerCard
+ *
+ * Stable, compact projection limited to the four allowed claim types.
+ */
+export type PeerCard = {
+  /**
+   * Model Id
+   */
+  model_id: string;
+  /**
+   * Bank Id
+   */
+  bank_id: string;
+  /**
+   * Observer Peer Id
+   */
+  observer_peer_id: string;
+  /**
+   * Target Peer Id
+   */
+  target_peer_id: string;
+  /**
+   * Version
+   */
+  version: number;
+  /**
+   * Entries
+   */
+  entries?: Array<PeerCardEntry>;
+  /**
+   * Updated At
+   */
+  updated_at: string;
+};
+
+/**
+ * PeerCardEntry
+ *
+ * Typed compact-card projection of a claim.
+ */
+export type PeerCardEntry = {
+  /**
+   * Claim Id
+   */
+  claim_id: string;
+  claim_type: PeerClaimType;
+  /**
+   * Text
+   */
+  text: string;
+  /**
+   * Confidence
+   */
+  confidence: number;
+  /**
+   * Locked
+   */
+  locked: boolean;
+};
+
+/**
+ * PeerClaim
+ *
+ * Persisted atomic claim with explicit lifecycle and provenance.
+ */
+export type PeerClaim = {
+  /**
+   * Id
+   */
+  id: string;
+  /**
+   * Bank Id
+   */
+  bank_id: string;
+  /**
+   * Model Id
+   */
+  model_id: string;
+  /**
+   * Observer Peer Id
+   */
+  observer_peer_id: string;
+  /**
+   * Target Peer Id
+   */
+  target_peer_id: string;
+  claim_type: PeerClaimType;
+  /**
+   * Text
+   */
+  text: string;
+  status: PeerClaimStatus;
+  origin: PeerClaimOrigin;
+  /**
+   * Confidence
+   */
+  confidence: number;
+  /**
+   * Locked
+   */
+  locked: boolean;
+  /**
+   * Provenance
+   */
+  provenance: string | null;
+  /**
+   * Valid From
+   */
+  valid_from: string | null;
+  /**
+   * Valid Until
+   */
+  valid_until: string | null;
+  /**
+   * Created At
+   */
+  created_at: string;
+  /**
+   * Updated At
+   */
+  updated_at: string;
+  /**
+   * Sources
+   */
+  sources?: Array<PeerSource>;
+};
+
+/**
+ * PeerClaimDraft
+ *
+ * Caller-supplied claim proposal before origin/status are assigned by the engine.
+ */
+export type PeerClaimDraft = {
+  claim_type: PeerClaimType;
+  /**
+   * Text
+   */
+  text: string;
+  /**
+   * Confidence
+   */
+  confidence?: number;
+  source_kind?: PeerSourceKind;
+  /**
+   * Source Ids
+   */
+  source_ids?: Array<string>;
+};
+
+/**
+ * PeerClaimOrigin
+ *
+ * How a claim entered the model.
+ */
+export type PeerClaimOrigin = "derived" | "manual" | "imported";
+
+/**
+ * PeerClaimStatus
+ *
+ * Lifecycle state of an atomic peer claim.
+ */
+export type PeerClaimStatus = "active" | "superseded" | "contested" | "retracted";
+
+/**
+ * PeerClaimType
+ *
+ * Taxonomy allowed in the compact peer card.
+ */
+export type PeerClaimType = "IDENTITY" | "ATTRIBUTE" | "RELATIONSHIP" | "INSTRUCTION";
+
+/**
+ * PeerClaims
+ *
+ * Directional claim collection.
+ */
+export type PeerClaims = {
+  /**
+   * Observer Peer Id
+   */
+  observer_peer_id: string;
+  /**
+   * Target Peer Id
+   */
+  target_peer_id: string;
+  /**
+   * Items
+   */
+  items?: Array<PeerClaim>;
+};
+
+/**
+ * PeerContext
+ *
+ * Typed context projection used by callers before a future retain seam exists.
+ */
+export type PeerContext = {
+  /**
+   * Bank Id
+   */
+  bank_id: string;
+  /**
+   * Observer Peer Id
+   */
+  observer_peer_id: string;
+  /**
+   * Target Peer Id
+   */
+  target_peer_id: string;
+  /**
+   * Model Id
+   */
+  model_id: string;
+  /**
+   * Version
+   */
+  version: number;
+  card: PeerCard;
+  /**
+   * Representation
+   */
+  representation: string;
+  /**
+   * Claims
+   */
+  claims?: Array<PeerClaim>;
+};
+
+/**
+ * PeerCorrectionApplyRequest
+ *
+ * Explicit request to apply a previously reviewed semantic correction plan.
+ */
+export type PeerCorrectionApplyRequest = {
+  plan: PeerCorrectionPlanInput;
+  /**
+   * Note
+   */
+  note?: string | null;
+};
+
+/**
+ * PeerCorrectionClaimDraft
+ *
+ * One stable claim proposed by the semantic correction planner.
+ */
+export type PeerCorrectionClaimDraft = {
+  claim_type: PeerClaimType;
+  /**
+   * Text
+   */
+  text: string;
+  /**
+   * Confidence
+   */
+  confidence?: number;
+};
+
+/**
+ * PeerCorrectionPlan
+ *
+ * Version-bound correction plan shown to the caller before any mutation.
+ */
+export type PeerCorrectionPlanInput = {
+  /**
+   * Claims
+   */
+  claims?: Array<PeerCorrectionClaimDraft>;
+  /**
+   * Supersede Claim Ids
+   */
+  supersede_claim_ids?: Array<string>;
+  /**
+   * Reason
+   */
+  reason: string;
+  /**
+   * Correction Text
+   */
+  correction_text: string;
+  /**
+   * Base Model Version
+   */
+  base_model_version: number;
+};
+
+/**
+ * PeerCorrectionPlan
+ *
+ * Version-bound correction plan shown to the caller before any mutation.
+ */
+export type PeerCorrectionPlanOutput = {
+  /**
+   * Claims
+   */
+  claims?: Array<PeerCorrectionClaimDraft>;
+  /**
+   * Supersede Claim Ids
+   */
+  supersede_claim_ids?: Array<string>;
+  /**
+   * Reason
+   */
+  reason: string;
+  /**
+   * Correction Text
+   */
+  correction_text: string;
+  /**
+   * Base Model Version
+   */
+  base_model_version: number;
+};
+
+/**
+ * PeerCorrectionRequest
+ *
+ * Natural-language correction to interpret against the current directional model.
+ */
+export type PeerCorrectionRequest = {
+  /**
+   * Text
+   */
+  text: string;
+};
+
+/**
+ * PeerCorrectionResult
+ *
+ * Atomic targeted correction result and its rematerialized directional model.
+ */
+export type PeerCorrectionResult = {
+  /**
+   * Claims
+   */
+  claims?: Array<PeerClaim>;
+  /**
+   * Superseded Claim Ids
+   */
+  superseded_claim_ids?: Array<string>;
+  model: PeerModel;
+};
+
+/**
+ * PeerCreate
+ *
+ * Request to create one bank-scoped peer identity.
+ */
+export type PeerCreate = {
+  /**
+   * External Id
+   */
+  external_id: string;
+  /**
+   * Display Name
+   */
+  display_name?: string | null;
+  /**
+   * Kind
+   */
+  kind?: string;
+  /**
+   * Metadata
+   */
+  metadata?: {
+    [key: string]: unknown;
+  };
+};
+
+/**
+ * PeerList
+ *
+ * Paginated peer collection.
+ */
+export type PeerList = {
+  /**
+   * Items
+   */
+  items?: Array<Peer>;
+  /**
+   * Total
+   */
+  total: number;
+  /**
+   * Limit
+   */
+  limit: number;
+  /**
+   * Offset
+   */
+  offset: number;
+};
+
+/**
+ * PeerModel
+ *
+ * Materialized directional model without untyped card payloads.
+ */
+export type PeerModel = {
+  /**
+   * Id
+   */
+  id: string;
+  /**
+   * Bank Id
+   */
+  bank_id: string;
+  /**
+   * Observer Peer Id
+   */
+  observer_peer_id: string;
+  /**
+   * Target Peer Id
+   */
+  target_peer_id: string;
+  /**
+   * Version
+   */
+  version: number;
+  card: PeerCard;
+  /**
+   * Representation
+   */
+  representation: string;
+  /**
+   * Created At
+   */
+  created_at: string;
+  /**
+   * Updated At
+   */
+  updated_at: string;
+  /**
+   * Source Cursor
+   */
+  source_cursor?: string | null;
+  /**
+   * Source Cursor Id
+   */
+  source_cursor_id?: string | null;
+};
+
+/**
+ * PeerModelRequest
+ *
+ * Request body for model/rebuild; claims are optional supplied evidence proposals.
+ */
+export type PeerModelRequest = {
+  /**
+   * Claims
+   */
+  claims?: Array<PeerClaimDraft>;
+};
+
+/**
+ * PeerOperation
+ *
+ * Stable async-operation acknowledgement.
+ */
+export type PeerOperation = {
+  /**
+   * Operation Id
+   */
+  operation_id: string;
+  /**
+   * Deduplicated
+   */
+  deduplicated?: boolean;
+};
+
+/**
+ * PeerSource
+ *
+ * One relational provenance edge for a claim.
+ */
+export type PeerSource = {
+  source_kind: PeerSourceKind;
+  /**
+   * Source Id
+   */
+  source_id: string;
+};
+
+/**
+ * PeerSourceKind
+ *
+ * Portable source-link namespaces supported by the first slice.
+ */
+export type PeerSourceKind = "memory_unit" | "manual";
+
+/**
+ * PeerUpdate
+ *
+ * Mutable peer fields; external_id remains the stable identity key.
+ */
+export type PeerUpdate = {
+  /**
+   * Display Name
+   */
+  display_name?: string | null;
+  /**
+   * Kind
+   */
+  kind?: string | null;
+  /**
+   * Metadata
+   */
+  metadata?: {
+    [key: string]: unknown;
+  } | null;
+};
+
+/**
  * RecallRequest
  *
  * Request model for recall endpoint.
@@ -4553,6 +5159,46 @@ export type ReprocessDocumentResponse = {
    * Items Count
    */
   items_count: number;
+};
+
+/**
+ * RetainPeerContext
+ *
+ * Explicit participant attribution carried through retain.
+ *
+ * IDs may be either a peer's internal ``id`` or its bank-scoped ``external_id``.
+ * This metadata is declarative input; Hindsight does not infer speaker or subject
+ * identity from free-form text at the HTTP boundary.
+ */
+export type RetainPeerContext = {
+  /**
+   * Observer Peer Id
+   */
+  observer_peer_id?: string | null;
+  /**
+   * Speaker Peer Id
+   */
+  speaker_peer_id?: string | null;
+  /**
+   * Subject Peer Ids
+   */
+  subject_peer_ids?: Array<string>;
+  /**
+   * Participant Peer Ids
+   */
+  participant_peer_ids?: Array<string>;
+  /**
+   * Source Message Id
+   */
+  source_message_id?: string | null;
+  /**
+   * Session Id
+   */
+  session_id?: string | null;
+  /**
+   * Modality
+   */
+  modality?: "actual" | "hypothetical" | "fictional" | "quoted";
 };
 
 /**
@@ -7813,6 +8459,474 @@ export type CreateOrUpdateBankResponses = {
 
 export type CreateOrUpdateBankResponse =
   CreateOrUpdateBankResponses[keyof CreateOrUpdateBankResponses];
+
+export type ListPeersData = {
+  body?: never;
+  headers?: {
+    /**
+     * Authorization
+     */
+    authorization?: string | null;
+  };
+  path: {
+    /**
+     * Bank Id
+     */
+    bank_id: string;
+  };
+  query?: {
+    /**
+     * Limit
+     */
+    limit?: number;
+    /**
+     * Offset
+     */
+    offset?: number;
+  };
+  url: "/v1/default/banks/{bank_id}/peers";
+};
+
+export type ListPeersErrors = {
+  /**
+   * Validation Error
+   */
+  422: HttpValidationError;
+};
+
+export type ListPeersError = ListPeersErrors[keyof ListPeersErrors];
+
+export type ListPeersResponses = {
+  /**
+   * Successful Response
+   */
+  200: PeerList;
+};
+
+export type ListPeersResponse = ListPeersResponses[keyof ListPeersResponses];
+
+export type CreatePeerData = {
+  body: PeerCreate;
+  headers?: {
+    /**
+     * Authorization
+     */
+    authorization?: string | null;
+  };
+  path: {
+    /**
+     * Bank Id
+     */
+    bank_id: string;
+  };
+  query?: never;
+  url: "/v1/default/banks/{bank_id}/peers";
+};
+
+export type CreatePeerErrors = {
+  /**
+   * Validation Error
+   */
+  422: HttpValidationError;
+};
+
+export type CreatePeerError = CreatePeerErrors[keyof CreatePeerErrors];
+
+export type CreatePeerResponses = {
+  /**
+   * Successful Response
+   */
+  201: Peer;
+};
+
+export type CreatePeerResponse = CreatePeerResponses[keyof CreatePeerResponses];
+
+export type BootstrapPeersData = {
+  body?: never;
+  headers?: {
+    /**
+     * Authorization
+     */
+    authorization?: string | null;
+  };
+  path: {
+    /**
+     * Bank Id
+     */
+    bank_id: string;
+  };
+  query?: never;
+  url: "/v1/default/banks/{bank_id}/peers/bootstrap";
+};
+
+export type BootstrapPeersErrors = {
+  /**
+   * Validation Error
+   */
+  422: HttpValidationError;
+};
+
+export type BootstrapPeersError = BootstrapPeersErrors[keyof BootstrapPeersErrors];
+
+export type BootstrapPeersResponses = {
+  /**
+   * Successful Response
+   */
+  202: PeerOperation;
+};
+
+export type BootstrapPeersResponse = BootstrapPeersResponses[keyof BootstrapPeersResponses];
+
+export type GetPeerData = {
+  body?: never;
+  headers?: {
+    /**
+     * Authorization
+     */
+    authorization?: string | null;
+  };
+  path: {
+    /**
+     * Bank Id
+     */
+    bank_id: string;
+    /**
+     * Peer Id
+     */
+    peer_id: string;
+  };
+  query?: never;
+  url: "/v1/default/banks/{bank_id}/peers/{peer_id}";
+};
+
+export type GetPeerErrors = {
+  /**
+   * Validation Error
+   */
+  422: HttpValidationError;
+};
+
+export type GetPeerError = GetPeerErrors[keyof GetPeerErrors];
+
+export type GetPeerResponses = {
+  /**
+   * Successful Response
+   */
+  200: Peer;
+};
+
+export type GetPeerResponse = GetPeerResponses[keyof GetPeerResponses];
+
+export type UpdatePeerData = {
+  body: PeerUpdate;
+  headers?: {
+    /**
+     * Authorization
+     */
+    authorization?: string | null;
+  };
+  path: {
+    /**
+     * Bank Id
+     */
+    bank_id: string;
+    /**
+     * Peer Id
+     */
+    peer_id: string;
+  };
+  query?: never;
+  url: "/v1/default/banks/{bank_id}/peers/{peer_id}";
+};
+
+export type UpdatePeerErrors = {
+  /**
+   * Validation Error
+   */
+  422: HttpValidationError;
+};
+
+export type UpdatePeerError = UpdatePeerErrors[keyof UpdatePeerErrors];
+
+export type UpdatePeerResponses = {
+  /**
+   * Successful Response
+   */
+  200: Peer;
+};
+
+export type UpdatePeerResponse = UpdatePeerResponses[keyof UpdatePeerResponses];
+
+export type GetPeerContextData = {
+  body?: never;
+  headers?: {
+    /**
+     * Authorization
+     */
+    authorization?: string | null;
+  };
+  path: {
+    /**
+     * Bank Id
+     */
+    bank_id: string;
+    /**
+     * Observer Peer Id
+     */
+    observer_peer_id: string;
+    /**
+     * Target Peer Id
+     */
+    target_peer_id: string;
+  };
+  query?: never;
+  url: "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/context/{target_peer_id}";
+};
+
+export type GetPeerContextErrors = {
+  /**
+   * Validation Error
+   */
+  422: HttpValidationError;
+};
+
+export type GetPeerContextError = GetPeerContextErrors[keyof GetPeerContextErrors];
+
+export type GetPeerContextResponses = {
+  /**
+   * Successful Response
+   */
+  200: PeerContext;
+};
+
+export type GetPeerContextResponse = GetPeerContextResponses[keyof GetPeerContextResponses];
+
+export type GetPeerClaimsData = {
+  body?: never;
+  headers?: {
+    /**
+     * Authorization
+     */
+    authorization?: string | null;
+  };
+  path: {
+    /**
+     * Bank Id
+     */
+    bank_id: string;
+    /**
+     * Observer Peer Id
+     */
+    observer_peer_id: string;
+    /**
+     * Target Peer Id
+     */
+    target_peer_id: string;
+  };
+  query?: never;
+  url: "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/claims/{target_peer_id}";
+};
+
+export type GetPeerClaimsErrors = {
+  /**
+   * Validation Error
+   */
+  422: HttpValidationError;
+};
+
+export type GetPeerClaimsError = GetPeerClaimsErrors[keyof GetPeerClaimsErrors];
+
+export type GetPeerClaimsResponses = {
+  /**
+   * Successful Response
+   */
+  200: PeerClaims;
+};
+
+export type GetPeerClaimsResponse = GetPeerClaimsResponses[keyof GetPeerClaimsResponses];
+
+export type ModelPeerData = {
+  /**
+   * Payload
+   */
+  body?: PeerModelRequest | null;
+  headers?: {
+    /**
+     * Authorization
+     */
+    authorization?: string | null;
+  };
+  path: {
+    /**
+     * Bank Id
+     */
+    bank_id: string;
+    /**
+     * Observer Peer Id
+     */
+    observer_peer_id: string;
+    /**
+     * Target Peer Id
+     */
+    target_peer_id: string;
+  };
+  query?: never;
+  url: "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/model/{target_peer_id}";
+};
+
+export type ModelPeerErrors = {
+  /**
+   * Validation Error
+   */
+  422: HttpValidationError;
+};
+
+export type ModelPeerError = ModelPeerErrors[keyof ModelPeerErrors];
+
+export type ModelPeerResponses = {
+  /**
+   * Successful Response
+   */
+  202: PeerOperation;
+};
+
+export type ModelPeerResponse = ModelPeerResponses[keyof ModelPeerResponses];
+
+export type RebuildPeerModelData = {
+  /**
+   * Payload
+   */
+  body?: PeerModelRequest | null;
+  headers?: {
+    /**
+     * Authorization
+     */
+    authorization?: string | null;
+  };
+  path: {
+    /**
+     * Bank Id
+     */
+    bank_id: string;
+    /**
+     * Observer Peer Id
+     */
+    observer_peer_id: string;
+    /**
+     * Target Peer Id
+     */
+    target_peer_id: string;
+  };
+  query?: never;
+  url: "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/rebuild/{target_peer_id}";
+};
+
+export type RebuildPeerModelErrors = {
+  /**
+   * Validation Error
+   */
+  422: HttpValidationError;
+};
+
+export type RebuildPeerModelError = RebuildPeerModelErrors[keyof RebuildPeerModelErrors];
+
+export type RebuildPeerModelResponses = {
+  /**
+   * Successful Response
+   */
+  200: PeerModel;
+};
+
+export type RebuildPeerModelResponse = RebuildPeerModelResponses[keyof RebuildPeerModelResponses];
+
+export type PlanPeerCorrectionData = {
+  body: PeerCorrectionRequest;
+  headers?: {
+    /**
+     * Authorization
+     */
+    authorization?: string | null;
+  };
+  path: {
+    /**
+     * Bank Id
+     */
+    bank_id: string;
+    /**
+     * Observer Peer Id
+     */
+    observer_peer_id: string;
+    /**
+     * Target Peer Id
+     */
+    target_peer_id: string;
+  };
+  query?: never;
+  url: "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/corrections/{target_peer_id}/plan";
+};
+
+export type PlanPeerCorrectionErrors = {
+  /**
+   * Validation Error
+   */
+  422: HttpValidationError;
+};
+
+export type PlanPeerCorrectionError = PlanPeerCorrectionErrors[keyof PlanPeerCorrectionErrors];
+
+export type PlanPeerCorrectionResponses = {
+  /**
+   * Successful Response
+   */
+  200: PeerCorrectionPlanOutput;
+};
+
+export type PlanPeerCorrectionResponse =
+  PlanPeerCorrectionResponses[keyof PlanPeerCorrectionResponses];
+
+export type CorrectPeerModelData = {
+  body: PeerCorrectionApplyRequest;
+  headers?: {
+    /**
+     * Authorization
+     */
+    authorization?: string | null;
+  };
+  path: {
+    /**
+     * Bank Id
+     */
+    bank_id: string;
+    /**
+     * Observer Peer Id
+     */
+    observer_peer_id: string;
+    /**
+     * Target Peer Id
+     */
+    target_peer_id: string;
+  };
+  query?: never;
+  url: "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/corrections/{target_peer_id}";
+};
+
+export type CorrectPeerModelErrors = {
+  /**
+   * Validation Error
+   */
+  422: HttpValidationError;
+};
+
+export type CorrectPeerModelError = CorrectPeerModelErrors[keyof CorrectPeerModelErrors];
+
+export type CorrectPeerModelResponses = {
+  /**
+   * Successful Response
+   */
+  200: PeerCorrectionResult;
+};
+
+export type CorrectPeerModelResponse = CorrectPeerModelResponses[keyof CorrectPeerModelResponses];
 
 export type ImportBankTemplateData = {
   body?: never;

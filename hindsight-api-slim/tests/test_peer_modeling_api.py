@@ -1,10 +1,13 @@
 """Focused PostgreSQL/API vertical-slice coverage for native peer modeling."""
 
 import json
+import logging
 import uuid
 
 import pytest
 
+from hindsight_api.api.http import _raise_peer_http_error
+from hindsight_api.engine.peer_modeling.errors import PeerValidationError
 from hindsight_api.engine.peer_modeling.repository import PeerRepository
 
 
@@ -495,3 +498,87 @@ async def test_peer_bootstrap_discovers_peers_materializes_cards_and_reports_pro
             target_peer_id=peers["morgan-fixture"]["id"],
         )
     ).source_ids
+
+
+def test_raise_peer_http_error_maps_validation_to_400() -> None:
+    """PeerValidationError is a domain error, not a ValueError: it must still be a 400."""
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        _raise_peer_http_error(PeerValidationError("stale pair source"))
+    assert exc_info.value.status_code == 400
+    assert "stale pair source" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_invalid_peer_model_claim_returns_400_not_500(api_client) -> None:
+    """A model request whose claim has no memory sources must not become an unhandled 500."""
+    bank_id = f"peer-invalid-{uuid.uuid4()}"
+    create_bank = await api_client.put(f"/v1/default/banks/{bank_id}", json={"name": "Invalid peer"})
+    assert create_bank.status_code == 200, create_bank.text
+    config_response = await api_client.patch(
+        f"/v1/default/banks/{bank_id}/config",
+        json={
+            "updates": {
+                "enable_peer_modeling": True,
+                "peer_model_min_pattern_sources": 1,
+                "peer_model_cooldown_seconds": 0,
+            }
+        },
+    )
+    assert config_response.status_code == 200, config_response.text
+
+    observer = await api_client.post(
+        f"/v1/default/banks/{bank_id}/peers", json={"external_id": "obs", "display_name": "Obs"}
+    )
+    target = await api_client.post(
+        f"/v1/default/banks/{bank_id}/peers", json={"external_id": "tgt", "display_name": "Tgt"}
+    )
+    assert observer.status_code == 201, observer.text
+    assert target.status_code == 201, target.text
+
+    response = await api_client.post(
+        f"/v1/default/banks/{bank_id}/peers/{observer.json()['id']}/model/{target.json()['id']}",
+        json={
+            "claims": [
+                {
+                    "claim_type": "ATTRIBUTE",
+                    "text": "Invalid claim without sources.",
+                    "source_ids": [],
+                }
+            ]
+        },
+    )
+    assert response.status_code == 400, response.text
+
+
+def test_discovery_llm_failure_logs_error_type_not_raw_exception(caplog) -> None:
+    """Bootstrap discovery fallback must not leak the provider's exception text into logs."""
+    import asyncio
+
+    from hindsight_api.engine.peer_modeling.bootstrap import _discover_peers, _fallback_discovery
+
+    marker = "RAW_PROVIDER_SECRET_7f3a9c"
+    metadata_marker = "METADATA_SECRET_1b2e4d"
+
+    class _RaisingProvider:
+        async def call(self, *args, **kwargs):
+            raise RuntimeError(f"provider exploded: {marker}")
+
+    caplog.set_level(logging.WARNING, logger="hindsight_api.engine.peer_modeling.bootstrap")
+
+    result = asyncio.run(
+        _discover_peers(
+            llm=_RaisingProvider(),
+            existing=[],
+            metadata_values=[metadata_marker],
+            contexts=[],
+        )
+    )
+
+    # Fallback must still produce a deterministic metadata-based discovery.
+    assert result == _fallback_discovery([], [metadata_marker], [])
+    log_output = "\n".join(record.getMessage() for record in caplog.records)
+    assert "error_type=RuntimeError" in log_output
+    assert marker not in log_output
+    assert metadata_marker not in log_output
