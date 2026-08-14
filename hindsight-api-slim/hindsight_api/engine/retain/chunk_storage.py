@@ -133,13 +133,16 @@ async def delete_chunks_by_ids(conn, chunk_ids: list[str], bank_id: str | None =
     # this in ``handle_document_tracking``; the delta path deletes facts through this cascade
     # instead, which is why the sweep has to live here rather than at one of the call sites.
     invalidated = 0
+    outgoing_unit_ids: list[str] = []
     if bank_id:
         outgoing_unit_ids = await memory_ids_for_chunks(conn, bank_id, chunk_ids)
         if outgoing_unit_ids:
             from ..graph_maintenance import enqueue_entity_prune_candidates
-            from .fact_storage import delete_stale_observations_for_memories
+            from .fact_storage import delete_stale_observations_and_invalidate_peer_sources
 
-            invalidated = await delete_stale_observations_for_memories(conn, bank_id, outgoing_unit_ids, ops=ops)
+            invalidated, _ = await delete_stale_observations_and_invalidate_peer_sources(
+                conn, bank_id, outgoing_unit_ids, ops=ops
+            )
             # Queue the entities these facts reference BEFORE the cascade takes
             # their unit_entities rows: afterwards an entity whose last posting
             # was here is unreachable garbage. Delta retain deletes facts only

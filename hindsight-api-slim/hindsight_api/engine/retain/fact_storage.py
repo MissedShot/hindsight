@@ -7,6 +7,7 @@ Handles insertion of facts into the database.
 import json
 import logging
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
@@ -155,8 +156,9 @@ async def ensure_bank_exists(conn, bank_id: str, ops=None) -> None:
 async def delete_stale_observations_for_memories(
     conn,
     bank_id: str,
-    fact_ids: "list[str | uuid.UUID]",
+    fact_ids: "Sequence[str | uuid.UUID]",
     ops=None,
+    deleted_observation_ids: list[str] | None = None,
 ) -> int:
     """Delete observations whose source memories are about to be removed.
 
@@ -184,13 +186,44 @@ async def delete_stale_observations_for_memories(
 
     from ..memories import get_memories
 
-    return await get_memories().delete_stale_observations(
+    deleted = await get_memories().delete_stale_observations(
         conn=conn,
         ops=ops,
         fq_table=fq_table,
         bank_id=bank_id,
-        fact_ids=fact_ids,
+        fact_ids=list(fact_ids),
     )
+    if deleted_observation_ids is not None:
+        deleted_observation_ids.extend(getattr(deleted, "observation_ids", ()))
+    return int(deleted)
+
+
+async def delete_stale_observations_and_invalidate_peer_sources(
+    conn,
+    bank_id: str,
+    fact_ids: "Sequence[str | uuid.UUID]",
+    ops=None,
+    include_fact_ids: bool = True,
+):
+    """Delete derived observations and invalidate every removed peer source."""
+    from ..peer_modeling.source_cleanup import invalidate_changed_memory_sources
+
+    deleted_observation_ids: list[str] = []
+    invalidated = await delete_stale_observations_for_memories(
+        conn,
+        bank_id,
+        fact_ids,
+        ops=ops,
+        deleted_observation_ids=deleted_observation_ids,
+    )
+    direct_source_ids = [str(fact_id) for fact_id in fact_ids] if include_fact_ids else []
+    peer_source_ids = list(dict.fromkeys([*direct_source_ids, *deleted_observation_ids]))
+    peer_invalidation = await invalidate_changed_memory_sources(
+        conn,
+        bank_id=bank_id,
+        source_ids=peer_source_ids,
+    )
+    return invalidated, peer_invalidation
 
 
 async def handle_document_tracking(
@@ -264,7 +297,9 @@ async def handle_document_tracking(
             if not page_token:
                 break
         if existing_unit_ids:
-            invalidated = await delete_stale_observations_for_memories(conn, bank_id, existing_unit_ids, ops=ops)
+            invalidated, peer_invalidation = await delete_stale_observations_and_invalidate_peer_sources(
+                conn, bank_id, existing_unit_ids, ops=ops
+            )
             if invalidated:
                 logger.info(
                     f"[RETAIN] Document {document_id} re-ingested: invalidated "
@@ -278,6 +313,13 @@ async def handle_document_tracking(
                     f"[RETAIN] Document {document_id} re-ingested: no observations derived from "
                     f"{len(existing_unit_ids)} outgoing memory_units"
                 )
+            if peer_invalidation.claims_superseded:
+                logger.info(
+                    "[RETAIN] Document re-ingest invalidated %s peer claim(s) across %s model(s)",
+                    peer_invalidation.claims_superseded,
+                    peer_invalidation.models_updated,
+                )
+
             # Capture link-recompute victims BEFORE the cascade. Same staleness
             # applies on upsert as on explicit delete: surviving units in OTHER
             # documents that linked to these doomed units are about to lose

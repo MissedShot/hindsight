@@ -7603,7 +7603,9 @@ class MemoryEngine(MemoryEngineInterface):
 
                 # Invalidate observations referencing these (now-deleted) memories
                 if unit_ids:
-                    invalidated_obs = await self._delete_stale_observations_for_memories(conn, bank_id, unit_ids)
+                    invalidated_obs = await self._delete_stale_observations_and_invalidate_peer_sources(
+                        conn, bank_id, unit_ids
+                    )
 
                 result = {
                     "document_deleted": 1 if deleted else 0,
@@ -7933,9 +7935,11 @@ class MemoryEngine(MemoryEngineInterface):
                         _del_txn = await _store.begin_txn(conn=conn, fq_table=fq_table, bank_id=bank_id, mutating=True)
                         await _store.delete_facts(bank_id, [unit_id], txn=_del_txn)
 
-                # Invalidate observations referencing this (now-deleted) source memory
-                if bank_id and fact_type in ("experience", "world"):
-                    invalidated_obs = await self._delete_stale_observations_for_memories(conn, bank_id, [unit_id])
+                # Invalidate every peer source removed directly or through observation cleanup.
+                if bank_id and fact_type in ("experience", "world", "observation"):
+                    invalidated_obs = await self._delete_stale_observations_and_invalidate_peer_sources(
+                        conn, bank_id, [unit_id]
+                    )
                     if invalidated_obs > 0:
                         bank_id_for_consolidation = bank_id
 
@@ -8137,8 +8141,10 @@ class MemoryEngine(MemoryEngineInterface):
                     # whose source facts were touched (observations reference
                     # source_memory_ids).
                     invalidated = 0
-                    if source_ids:
-                        invalidated = await self._delete_stale_observations_for_memories(conn, bank_id, source_ids)
+                    if ids_for_bank:
+                        invalidated = await self._delete_stale_observations_and_invalidate_peer_sources(
+                            conn, bank_id, ids_for_bank
+                        )
                         if invalidated > 0:
                             banks_with_invalidated_obs.add(bank_id)
 
@@ -8230,12 +8236,10 @@ class MemoryEngine(MemoryEngineInterface):
             async with conn.transaction():
                 try:
                     if fact_type:
-                        # For source memory types, capture ids so we can invalidate
-                        # dependent observations AFTER the delete below. Running the
-                        # stale-observation sweep post-delete ensures we also catch
-                        # observations inserted concurrently by consolidation.
+                        # Capture every unit id that can be peer provenance. Source
+                        # memories also drive the dependent-observation sweep below.
                         unit_ids: list[str] = []
-                        if fact_type in ("experience", "world"):
+                        if fact_type in ("experience", "world", "observation"):
                             # These ids drive the stale-observation sweep below, so they must come
                             # from wherever the memories live: reading memory_units for a store that
                             # keeps them elsewhere yields nothing, and the sweep would silently skip,
@@ -8277,11 +8281,10 @@ class MemoryEngine(MemoryEngineInterface):
                             bank_id,
                             fact_type,
                         )
-                        # Deleting observations directly (fact_type='observation') bypasses the
-                        # stale-observation sweep below — unit_ids is only filled for source types —
-                        # and history no longer cascades from memory_units (that FK was dropped), so
-                        # drop the observations' snapshots explicitly. All history in the bank belongs
-                        # to observations, and this branch removes them all.
+                        # Deleting observations directly bypasses the derived-observation deletion
+                        # inside the sweep below, but ``unit_ids`` was captured above so peer-source
+                        # cleanup still receives every removed observation id. History no longer
+                        # cascades from memory_units, so drop those snapshots explicitly as well.
                         if fact_type == "observation":
                             await conn.execute(
                                 f"DELETE FROM {fq_table('observation_history')} WHERE bank_id = $1",
@@ -8289,7 +8292,7 @@ class MemoryEngine(MemoryEngineInterface):
                             )
 
                         if unit_ids:
-                            invalidated_obs = await self._delete_stale_observations_for_memories(
+                            invalidated_obs = await self._delete_stale_observations_and_invalidate_peer_sources(
                                 conn, bank_id, unit_ids
                             )
 
@@ -8648,7 +8651,12 @@ class MemoryEngine(MemoryEngineInterface):
             async with conn.transaction():
                 import uuid as uuid_module
 
-                deleted_count = await self._delete_stale_observations_for_memories(conn, bank_id, [memory_id])
+                deleted_count = await self._delete_stale_observations_and_invalidate_peer_sources(
+                    conn,
+                    bank_id,
+                    [memory_id],
+                    include_fact_ids=False,
+                )
 
                 # Also reset this memory's own consolidated_at so it gets re-consolidated
                 # (the memory was a source for the deleted observations, so it needs new ones)
@@ -9090,7 +9098,7 @@ class MemoryEngine(MemoryEngineInterface):
                                 embedding=edit_embedding,
                                 txn=_curation_txn,
                             )
-                        await self._delete_stale_observations_for_memories(conn, bank_id, [memory_id])
+                        await self._delete_stale_observations_and_invalidate_peer_sources(conn, bank_id, [memory_id])
                         need_consolidation = True
                         need_graph = True
                         edit_applied = True
@@ -9110,7 +9118,7 @@ class MemoryEngine(MemoryEngineInterface):
                             txn=_curation_txn,
                         )
                         # Sweep after the move, so a racing observation insert is caught too.
-                        await self._delete_stale_observations_for_memories(conn, bank_id, [memory_id])
+                        await self._delete_stale_observations_and_invalidate_peer_sources(conn, bank_id, [memory_id])
                         need_consolidation = True
                         need_graph = True
                     elif do_reason_update and archived2 and reason is not None:
@@ -12678,21 +12686,26 @@ class MemoryEngine(MemoryEngineInterface):
             "observations": [],
         }
 
-    async def _delete_stale_observations_for_memories(
+    async def _delete_stale_observations_and_invalidate_peer_sources(
         self,
         conn,
         bank_id: str,
         fact_ids: list[str],
+        *,
+        include_fact_ids: bool = True,
     ) -> int:
-        """Thin wrapper that delegates to ``fact_storage.delete_stale_observations_for_memories``.
+        """Atomically retire derived observations and every removed peer source."""
+        from .retain.fact_storage import delete_stale_observations_and_invalidate_peer_sources
 
-        Kept on the engine class so the existing call sites here and the
-        retain pipeline both end up running the same SQL. See the free
-        function for the full contract.
-        """
-        from .retain.fact_storage import delete_stale_observations_for_memories
-
-        return await delete_stale_observations_for_memories(conn, bank_id, fact_ids, ops=self._backend.ops)
+        assert self._backend is not None
+        invalidated, _ = await delete_stale_observations_and_invalidate_peer_sources(
+            conn,
+            bank_id,
+            fact_ids,
+            ops=self._backend.ops,
+            include_fact_ids=include_fact_ids,
+        )
+        return invalidated
 
     # =========================================================================
     # MENTAL MODELS CRUD

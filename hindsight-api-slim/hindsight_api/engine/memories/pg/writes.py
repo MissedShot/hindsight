@@ -229,6 +229,17 @@ async def observations_for_sources(
     ]
 
 
+class ObservationDeletionCount(int):
+    """Integer-compatible deletion count carrying the exact removed unit ids."""
+
+    observation_ids: tuple[str, ...]
+
+    def __new__(cls, value: int, observation_ids: list[str] | tuple[str, ...]):
+        instance = super().__new__(cls, value)
+        instance.observation_ids = tuple(observation_ids)
+        return instance
+
+
 async def delete_stale_observations(
     *,
     conn,
@@ -258,7 +269,7 @@ async def delete_stale_observations(
     Returns the number of observations deleted.
     """
     if not fact_ids:
-        return 0
+        return ObservationDeletionCount(0, ())
 
     fact_uuids = [uuid.UUID(str(fid)) if not isinstance(fid, uuid.UUID) else fid for fid in fact_ids]
 
@@ -266,7 +277,7 @@ async def delete_stale_observations(
         conn=conn, ops=ops, fq_table=fq_table, bank_id=bank_id, unit_ids=fact_uuids
     )
     if not affected_obs:
-        return 0
+        return ObservationDeletionCount(0, ())
 
     deleted_set = {str(uid) for uid in fact_uuids}
     obs_ids = [uuid.UUID(obs.unit_id) for obs in affected_obs]
@@ -307,7 +318,7 @@ async def delete_stale_observations(
         f"[OBSERVATIONS] Deleted {len(obs_ids)} observations, reset {len(remaining_source_ids)} "
         f"source memories for re-consolidation in bank {bank_id}"
     )
-    return len(obs_ids)
+    return ObservationDeletionCount(len(obs_ids), [str(obs_id) for obs_id in obs_ids])
 
 
 # --------------------------------------------------------------------- curation archive

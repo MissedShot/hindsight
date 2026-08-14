@@ -982,8 +982,9 @@ async def test_pair_failure_continues_and_all_failures_are_not_completed() -> No
         {(OBSERVER_ID, TARGET_A_ID): [source_a], (OBSERVER_ID, TARGET_B_ID): [source_b]},
     )
     service = _WindowService(repository)
+    engine = _WindowEngine(service)
     result = await refresh_existing_peer_models(
-        memory_engine=_WindowEngine(service),
+        memory_engine=cast(MemoryEngine, engine),
         bank_id="bank",
         request_context=object(),
         snapshot_at=NOW,
@@ -992,6 +993,9 @@ async def test_pair_failure_continues_and_all_failures_are_not_completed() -> No
 
     assert [pair.status for pair in result.pairs] == ["failed", "failed"]
     assert result.status == "failed"
+    progress_call = engine._write_operation_progress.await_args
+    assert progress_call is not None
+    assert progress_call.kwargs["stage"] == "failed"
 
 
 @pytest.mark.asyncio

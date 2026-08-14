@@ -296,9 +296,16 @@ async def refresh_existing_peer_models(
             )
         finally:
             has_pending_window = any(outcome.has_more and outcome.status != "failed" for outcome in outcomes)
+            result_status = _result_status(outcomes)
+            if processed_models != total_models or has_pending_window:
+                progress_stage = "refreshing"
+            elif result_status in {"failed", "partial"}:
+                progress_stage = result_status
+            else:
+                progress_stage = "completed"
             await memory_engine._write_operation_progress(
                 operation_id,
-                stage=("completed" if processed_models == total_models and not has_pending_window else "refreshing"),
+                stage=progress_stage,
                 processed=processed_models,
                 total=total_models,
             )
