@@ -22,6 +22,7 @@ import { MentalModelsView } from "@/components/mental-models-view";
 import { WebhooksView } from "@/components/webhooks-view";
 import { AuditLogsView } from "@/components/audit-logs-view";
 import { LLMRequestsView } from "@/components/llm-requests-view";
+import { PeersView } from "@/components/peers-view";
 import { FeatureNotEnabled } from "@/components/feature-not-enabled";
 import { useFeatures } from "@/lib/features-context";
 import { useBank } from "@/lib/bank-context";
@@ -67,6 +68,7 @@ type NavItem =
   | "documents"
   | "entities"
   | "knowledge"
+  | "peers"
   | "profile";
 type DataSubTab = "world" | "experience" | "observations";
 type KnowledgeTab = "pages" | "models";
@@ -103,10 +105,12 @@ export default function BankPage() {
   // then) or the field is unavailable.
   const [bankAuditLogEnabled, setBankAuditLogEnabled] = useState<boolean | null>(null);
   const [bankObservationsEnabled, setBankObservationsEnabled] = useState<boolean | null>(null);
+  const [bankPeerModelingEnabled, setBankPeerModelingEnabled] = useState<boolean | null>(null);
   useEffect(() => {
     if (!bankId || !bankConfigEnabled) {
       setBankAuditLogEnabled(null);
       setBankObservationsEnabled(null);
+      setBankPeerModelingEnabled(null);
       return;
     }
     let cancelled = false;
@@ -116,13 +120,16 @@ export default function BankPage() {
         if (cancelled) return;
         const audit = r.config?.audit_log_enabled;
         const observations = r.config?.enable_observations;
+        const peerModeling = r.config?.enable_peer_modeling;
         setBankAuditLogEnabled(typeof audit === "boolean" ? audit : null);
         setBankObservationsEnabled(typeof observations === "boolean" ? observations : null);
+        setBankPeerModelingEnabled(typeof peerModeling === "boolean" ? peerModeling : null);
       })
       .catch(() => {
         if (cancelled) return;
         setBankAuditLogEnabled(null);
         setBankObservationsEnabled(null);
+        setBankPeerModelingEnabled(null);
       });
     return () => {
       cancelled = true;
@@ -130,6 +137,7 @@ export default function BankPage() {
   }, [bankId, bankConfigEnabled]);
   const auditLogEnabled = bankAuditLogEnabled ?? features?.audit_log ?? false;
   const observationsEnabled = bankObservationsEnabled ?? features?.observations ?? false;
+  const peerModelingEnabled = bankPeerModelingEnabled ?? features?.peer_modeling ?? false;
 
   // Bank actions state
   const [showLlmHealthDialog, setShowLlmHealthDialog] = useState(false);
@@ -247,7 +255,11 @@ export default function BankPage() {
       </div>
 
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        <Sidebar currentTab={view} onTabChange={handleTabChange} />
+        <Sidebar
+          currentTab={view}
+          onTabChange={handleTabChange}
+          peerModelingEnabled={peerModelingEnabled}
+        />
 
         <main className="flex-1 min-w-0 overflow-y-auto">
           <div className="p-6">
@@ -495,7 +507,7 @@ export default function BankPage() {
                     )}
                     {bankConfigTab === "configuration" && bankConfigEnabled && (
                       <div className="space-y-6">
-                        <BankConfigView />
+                        <BankConfigView onPeerModelingChange={setBankPeerModelingEnabled} />
                       </div>
                     )}
                     {bankConfigTab === "webhooks" && (
@@ -730,11 +742,30 @@ export default function BankPage() {
                 </div>
               )}
 
+              {/* Documents Tab — DocumentsView renders its own title row so the
+                Export/Import Actions menu can sit beside the heading. */}
+              {view === "documents" && (
+                <div>
+                  <DocumentsView />
+                </div>
+              )}
+
+              {/* Peers Tab */}
+              {view === "peers" && <PeersView enabled={peerModelingEnabled} />}
+
+              {/* Entities Tab */}
+              {view === "entities" && (
+                <div>
+                  <h1 className="text-3xl font-bold mb-2 text-foreground">{t("entities")}</h1>
+                  <p className="text-muted-foreground mb-6">{t("entitiesDescription")}</p>
+                  <EntitiesView />
+                </div>
+              )}
+
               {/* Home Tab — bank dashboard. */}
               {view === "home" && bankId && (
                 <HomeView bankId={bankId} onNavigate={(tab) => handleTabChange(tab as NavItem)} />
               )}
-            </div>
           </div>
         </main>
       </div>

@@ -12,6 +12,7 @@ import {
   FileText,
   Users,
   Network,
+  UsersRound,
   ChevronLeft,
   ChevronRight,
   Settings,
@@ -28,17 +29,20 @@ type NavItem =
   | "documents"
   | "entities"
   | "knowledge"
+  | "peers"
   | "profile";
 
 interface SidebarProps {
   currentTab: NavItem;
   onTabChange: (tab: NavItem) => void;
+  peerModelingEnabled: boolean;
 }
 
-export function Sidebar({ currentTab, onTabChange }: SidebarProps) {
+export function Sidebar({ currentTab, onTabChange, peerModelingEnabled }: SidebarProps) {
   const t = useTranslations("bank.sidebar");
   const tBank = useTranslations("bank");
   const { currentBank } = useBank();
+
   const [isCollapsed, setIsCollapsed] = useState(true);
   const [apiVersion, setApiVersion] = useState<string | null>(null);
 
@@ -61,6 +65,12 @@ export function Sidebar({ currentTab, onTabChange }: SidebarProps) {
     { id: "reflect" as NavItem, label: t("reflect"), icon: Sparkles },
     { id: "documents" as NavItem, label: t("documents"), icon: FileText },
     { id: "entities" as NavItem, label: t("entities"), icon: Users },
+    {
+      id: "peers" as NavItem,
+      label: t("peers"),
+      icon: UsersRound,
+      off: !peerModelingEnabled,
+    },
     { id: "profile" as NavItem, label: tBank("bankConfiguration"), icon: Settings },
   ];
 
@@ -123,10 +133,15 @@ export function Sidebar({ currentTab, onTabChange }: SidebarProps) {
                       : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
                     isCollapsed && "justify-center px-0"
                   )}
-                  title={isCollapsed ? item.label : undefined}
+                  title={isCollapsed ? `${item.label}${item.off ? " (Off)" : ""}` : undefined}
                 >
                   <Icon className="w-5 h-5 flex-shrink-0" />
-                  {!isCollapsed && <span>{item.label}</span>}
+                  {!isCollapsed && <span className="flex-1">{item.label}</span>}
+                  {!isCollapsed && item.off && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                      Off
+                    </span>
+                  )}
                 </Link>
               </li>
             );

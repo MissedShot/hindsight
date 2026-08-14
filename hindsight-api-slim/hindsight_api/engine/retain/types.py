@@ -46,6 +46,7 @@ class RetainContentDict(TypedDict, total=False):
         Literal["per_tag", "combined", "all_combinations", "shared"] | list[list[str]]
     )  # Observation scopes for consolidation
     update_mode: Literal["replace", "append"]
+    peer_context: dict[str, object]
 
 
 @dataclass
@@ -65,6 +66,7 @@ class RetainContent:
     observation_scopes: Literal["per_tag", "combined", "all_combinations", "shared"] | list[list[str]] | None = (
         None  # Observation scopes
     )
+    peer_context: dict[str, object] | None = None
 
 
 @dataclass

@@ -579,6 +579,13 @@ async def _insert_facts_and_links(
     # an IndexError (see issue #1037).
     result_unit_ids = _map_results_to_contents(contents, processed_facts, unit_ids if unit_ids else [])
 
+    if config.enable_peer_modeling:
+        from hindsight_api.engine.peer_modeling.attribution import persist_memory_peer_roles
+
+        peer_role_count = await persist_memory_peer_roles(conn, bank_id, contents, result_unit_ids)
+        if peer_role_count:
+            log_buffer.append(f"  Peer attribution: {peer_role_count} role links")
+
     if outbox_callback is not None:
         await outbox_callback(conn)
 
@@ -1147,6 +1154,8 @@ async def retain_batch(
 
     # Convert dicts to RetainContent objects
     contents = _build_contents(contents_dicts, document_tags)
+    if any(content.peer_context is not None for content in contents) and not config.enable_peer_modeling:
+        raise ValueError("peer_context requires peer modeling to be enabled for this bank")
 
     # When contents have multiple distinct per-content document_ids and no
     # batch-level document_id, group by doc_id and process each group
@@ -1913,6 +1922,7 @@ async def _streaming_retain_batch(
                 entities=source.entities,
                 tags=source.tags,
                 observation_scopes=source.observation_scopes,
+                peer_context=source.peer_context,
             )
             # Attribute this chunk's extraction LLM call to its document, so the
             # trace row carries document_id (a document accrues one such trace
@@ -3366,6 +3376,7 @@ def _build_contents(contents_dicts: list[RetainContentDict], document_tags: list
             entities=item.get("entities", []),
             tags=merged_tags,
             observation_scopes=item.get("observation_scopes"),
+            peer_context=item.get("peer_context"),
         )
         contents.append(content)
     return contents
@@ -3427,6 +3438,7 @@ def _build_delta_contents(
             entities=template_content.entities,
             tags=template_content.tags,
             observation_scopes=template_content.observation_scopes,
+            peer_context=template_content.peer_context,
         )
         delta_contents.append(delta_content)
         delta_chunk_map[len(delta_contents) - 1] = original_chunk_idx

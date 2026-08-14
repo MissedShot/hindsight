@@ -146,9 +146,16 @@ async def test_hierarchical_fields_categorization():
     assert "enable_temporal_retrieval" in configurable
     assert "enable_graph_retrieval" in configurable
     assert "enable_reranking" in configurable
+    assert "enable_peer_modeling" in configurable
+    assert "enable_auto_peer_modeling" in configurable
+    assert "peer_model_min_new_facts" in configurable
+    assert "peer_model_cooldown_seconds" in configurable
+    assert "peer_model_max_card_entries" in configurable
+    assert "peer_model_min_pattern_sources" in configurable
+    assert "peer_model_representation_max_tokens" in configurable
 
     # Verify count is correct
-    assert len(configurable) == 45
+    assert len(configurable) == 52
 
     # Verify credential fields (NEVER exposed)
     assert "llm_api_key" in credentials

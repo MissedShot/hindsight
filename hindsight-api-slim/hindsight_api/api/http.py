@@ -174,6 +174,27 @@ from hindsight_api.engine.memory_engine import (
     _get_tiktoken_encoding,
 )
 from hindsight_api.engine.mental_model_refresh import MentalModelDryRunRefreshResult
+from hindsight_api.engine.peer_modeling.errors import (
+    PeerConflictError,
+    PeerFeatureDisabledError,
+    PeerNotFoundError,
+    PeerValidationError,
+)
+from hindsight_api.engine.peer_modeling.models import (
+    Peer,
+    PeerClaims,
+    PeerContext,
+    PeerCorrectionApplyRequest,
+    PeerCorrectionPlan,
+    PeerCorrectionRequest,
+    PeerCorrectionResult,
+    PeerCreate,
+    PeerList,
+    PeerModel,
+    PeerModelRequest,
+    PeerOperation,
+    PeerUpdate,
+)
 from hindsight_api.engine.providers.none_llm import LLMNotAvailableError
 from hindsight_api.engine.reflect import ReflectToolCallError
 from hindsight_api.engine.response_models import (
@@ -197,6 +218,19 @@ from hindsight_api.metrics import (
 from hindsight_api.models import RequestContext
 
 logger = logging.getLogger(__name__)
+
+
+def _raise_peer_http_error(error: Exception) -> None:
+    """Map peer-domain failures without leaking database or provider internals."""
+    if isinstance(error, PeerFeatureDisabledError):
+        raise HTTPException(status_code=404, detail=str(error))
+    if isinstance(error, PeerNotFoundError):
+        raise HTTPException(status_code=404, detail=str(error))
+    if isinstance(error, PeerConflictError):
+        raise HTTPException(status_code=409, detail=str(error))
+    if isinstance(error, PeerValidationError):
+        raise HTTPException(status_code=400, detail=str(error))
+    raise error
 
 # 499 is the de facto reverse-proxy status for "client closed request".
 _CLIENT_CLOSED_REQUEST_STATUS_CODE = 499
@@ -616,6 +650,54 @@ class EntityInput(BaseModel):
     type: str | None = Field(default=None, description="Optional entity type (e.g., 'PERSON', 'ORG', 'CONCEPT')")
 
 
+class RetainPeerContext(BaseModel):
+    """Explicit participant attribution carried through retain.
+
+    IDs may be either a peer's internal ``id`` or its bank-scoped ``external_id``.
+    This metadata is declarative input; Hindsight does not infer speaker or subject
+    identity from free-form text at the HTTP boundary.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    observer_peer_id: str | None = Field(default=None, min_length=1, max_length=512)
+    speaker_peer_id: str | None = Field(default=None, min_length=1, max_length=512)
+    subject_peer_ids: list[str] = Field(default_factory=list, max_length=64)
+    participant_peer_ids: list[str] = Field(default_factory=list, max_length=64)
+    source_message_id: str | None = Field(default=None, min_length=1, max_length=1024)
+    session_id: str | None = Field(default=None, min_length=1, max_length=1024)
+    modality: Literal["actual", "hypothetical", "fictional", "quoted"] = "actual"
+
+    @field_validator("subject_peer_ids", "participant_peer_ids")
+    @classmethod
+    def normalize_peer_ids(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            stripped = value.strip()
+            if not stripped:
+                raise ValueError("peer ids must not be blank")
+            if len(stripped) > 512:
+                raise ValueError("peer ids must be at most 512 characters")
+            if stripped not in seen:
+                normalized.append(stripped)
+                seen.add(stripped)
+        return normalized
+
+    @model_validator(mode="after")
+    def require_attribution(self) -> "RetainPeerContext":
+        if not any(
+            (
+                self.observer_peer_id,
+                self.speaker_peer_id,
+                self.subject_peer_ids,
+                self.participant_peer_ids,
+            )
+        ):
+            raise ValueError("peer_context must identify at least one peer")
+        return self
+
+
 class MemoryItem(BaseModel):
     """Single memory item for retain."""
 
@@ -697,6 +779,13 @@ class MemoryItem(BaseModel):
             "regardless of their tags — useful for deduplicating across volatile per-call provenance tags "
             "(e.g. per-session ids) while keeping those tags on the source facts. "
             "A list of tag lists runs one pass per inner list, giving full control over which combinations to use."
+        ),
+    )
+    peer_context: RetainPeerContext | None = Field(
+        default=None,
+        description=(
+            "Explicit observer/speaker/subject attribution for native peer modeling. "
+            "Peer modeling must be enabled and referenced peers must exist in this bank."
         ),
     )
     strategy: str | None = Field(
@@ -3403,6 +3492,7 @@ class FeaturesInfo(BaseModel):
     """Feature flags indicating which capabilities are enabled."""
 
     observations: bool = Field(description="Whether observations (auto-consolidation) are enabled")
+    peer_modeling: bool = Field(description="Whether directional peer cards and representations are enabled")
     mcp: bool = Field(description="Whether MCP (Model Context Protocol) server is enabled")
     worker: bool = Field(description="Whether the background worker is enabled")
     bank_config_api: bool = Field(description="Whether per-bank configuration API is enabled")
@@ -3426,6 +3516,7 @@ class VersionResponse(BaseModel):
                 "api_version": "0.9.0",
                 "features": {
                     "observations": False,
+                    "peer_modeling": False,
                     "mcp": True,
                     "worker": True,
                     "bank_config_api": False,
@@ -4172,6 +4263,7 @@ def _register_routes(app: FastAPI):
             api_version=__version__,
             features=FeaturesInfo(
                 observations=config.enable_observations,
+                peer_modeling=config.enable_peer_modeling,
                 mcp=config.mcp_enabled,
                 worker=config.worker_enabled,
                 bank_config_api=config.enable_bank_config_api,
@@ -6927,6 +7019,250 @@ def _register_routes(app: FastAPI):
             raise HTTPException(status_code=500, detail=str(e))
 
     # =====================================================================
+    # Peer Modeling (experimental, opt-in)
+    # =====================================================================
+
+    @app.get(
+        "/v1/default/banks/{bank_id}/peers",
+        response_model=PeerList,
+        operation_id="list_peers",
+        tags=["Peer Modeling"],
+    )
+    async def api_list_peers(
+        bank_id: str,
+        limit: int = Query(default=100, ge=1, le=500),
+        offset: int = Query(default=0, ge=0),
+        request_context: RequestContext = Depends(get_request_context),
+    ):
+        try:
+            return await app.state.memory.list_peers(
+                bank_id, limit=limit, offset=offset, request_context=request_context
+            )
+        except (PeerFeatureDisabledError, PeerNotFoundError, PeerValidationError) as error:
+            _raise_peer_http_error(error)
+
+    @app.post(
+        "/v1/default/banks/{bank_id}/peers",
+        response_model=Peer,
+        status_code=201,
+        operation_id="create_peer",
+        tags=["Peer Modeling"],
+    )
+    async def api_create_peer(
+        bank_id: str,
+        payload: PeerCreate,
+        request_context: RequestContext = Depends(get_request_context),
+    ):
+        try:
+            return await app.state.memory.create_peer(bank_id, payload, request_context=request_context)
+        except (PeerFeatureDisabledError, PeerConflictError, PeerValidationError) as error:
+            _raise_peer_http_error(error)
+
+    @app.post(
+        "/v1/default/banks/{bank_id}/peers/bootstrap",
+        response_model=PeerOperation,
+        status_code=202,
+        operation_id="bootstrap_peers",
+        tags=["Peer Modeling"],
+    )
+    async def api_bootstrap_peers(
+        bank_id: str,
+        request_context: RequestContext = Depends(get_request_context),
+    ):
+        """Discover peers and build directional cards from existing bank evidence."""
+        try:
+            result = await app.state.memory.submit_async_peer_bootstrap(
+                bank_id,
+                request_context=request_context,
+            )
+            return PeerOperation(**result)
+        except (PeerFeatureDisabledError, PeerNotFoundError, PeerValidationError) as error:
+            _raise_peer_http_error(error)
+
+    @app.get(
+        "/v1/default/banks/{bank_id}/peers/{peer_id}",
+        response_model=Peer,
+        operation_id="get_peer",
+        tags=["Peer Modeling"],
+    )
+    async def api_get_peer(
+        bank_id: str,
+        peer_id: str,
+        request_context: RequestContext = Depends(get_request_context),
+    ):
+        try:
+            peer = await app.state.memory.get_peer(bank_id, peer_id, request_context=request_context)
+            if peer is None:
+                raise HTTPException(status_code=404, detail=f"Peer '{peer_id}' not found")
+            return peer
+        except (PeerFeatureDisabledError, PeerValidationError) as error:
+            _raise_peer_http_error(error)
+
+    @app.patch(
+        "/v1/default/banks/{bank_id}/peers/{peer_id}",
+        response_model=Peer,
+        operation_id="update_peer",
+        tags=["Peer Modeling"],
+    )
+    async def api_update_peer(
+        bank_id: str,
+        peer_id: str,
+        payload: PeerUpdate,
+        request_context: RequestContext = Depends(get_request_context),
+    ):
+        try:
+            peer = await app.state.memory.update_peer(
+                bank_id, peer_id, payload, request_context=request_context
+            )
+            if peer is None:
+                raise HTTPException(status_code=404, detail=f"Peer '{peer_id}' not found")
+            return peer
+        except (PeerFeatureDisabledError, PeerConflictError, PeerValidationError) as error:
+            _raise_peer_http_error(error)
+
+    @app.get(
+        "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/context/{target_peer_id}",
+        response_model=PeerContext,
+        operation_id="get_peer_context",
+        tags=["Peer Modeling"],
+    )
+    async def api_get_peer_context(
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        request_context: RequestContext = Depends(get_request_context),
+    ):
+        try:
+            return await app.state.memory.get_peer_context(
+                bank_id,
+                observer_peer_id,
+                target_peer_id,
+                request_context=request_context,
+            )
+        except (PeerFeatureDisabledError, PeerNotFoundError, PeerValidationError) as error:
+            _raise_peer_http_error(error)
+
+    @app.get(
+        "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/claims/{target_peer_id}",
+        response_model=PeerClaims,
+        operation_id="get_peer_claims",
+        tags=["Peer Modeling"],
+    )
+    async def api_get_peer_claims(
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        request_context: RequestContext = Depends(get_request_context),
+    ):
+        try:
+            return await app.state.memory.get_peer_claims(
+                bank_id,
+                observer_peer_id,
+                target_peer_id,
+                request_context=request_context,
+            )
+        except (PeerFeatureDisabledError, PeerNotFoundError, PeerValidationError) as error:
+            _raise_peer_http_error(error)
+
+    @app.post(
+        "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/model/{target_peer_id}",
+        response_model=PeerOperation,
+        status_code=202,
+        operation_id="model_peer",
+        tags=["Peer Modeling"],
+    )
+    async def api_model_peer(
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        payload: PeerModelRequest | None = None,
+        request_context: RequestContext = Depends(get_request_context),
+    ):
+        try:
+            result = await app.state.memory.submit_async_peer_modeling(
+                bank_id,
+                observer_peer_id,
+                target_peer_id,
+                payload,
+                request_context=request_context,
+            )
+            return PeerOperation(**result)
+        except (PeerFeatureDisabledError, PeerNotFoundError, PeerValidationError) as error:
+            _raise_peer_http_error(error)
+
+    @app.post(
+        "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/rebuild/{target_peer_id}",
+        response_model=PeerModel,
+        operation_id="rebuild_peer_model",
+        tags=["Peer Modeling"],
+    )
+    async def api_rebuild_peer_model(
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        payload: PeerModelRequest | None = None,
+        request_context: RequestContext = Depends(get_request_context),
+    ):
+        try:
+            return await app.state.memory.rebuild_peer_model(
+                bank_id,
+                observer_peer_id,
+                target_peer_id,
+                payload,
+                request_context=request_context,
+            )
+        except (PeerFeatureDisabledError, PeerNotFoundError, PeerValidationError) as error:
+            _raise_peer_http_error(error)
+
+    @app.post(
+        "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/corrections/{target_peer_id}/plan",
+        response_model=PeerCorrectionPlan,
+        operation_id="plan_peer_correction",
+        tags=["Peer Modeling"],
+    )
+    async def api_plan_peer_correction(
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        payload: PeerCorrectionRequest,
+        request_context: RequestContext = Depends(get_request_context),
+    ):
+        try:
+            return await app.state.memory.plan_peer_correction(
+                bank_id,
+                observer_peer_id,
+                target_peer_id,
+                payload,
+                request_context=request_context,
+            )
+        except (PeerFeatureDisabledError, PeerNotFoundError, PeerValidationError) as error:
+            _raise_peer_http_error(error)
+
+    @app.post(
+        "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/corrections/{target_peer_id}",
+        response_model=PeerCorrectionResult,
+        operation_id="correct_peer_model",
+        tags=["Peer Modeling"],
+    )
+    async def api_correct_peer_model(
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        payload: PeerCorrectionApplyRequest,
+        request_context: RequestContext = Depends(get_request_context),
+    ):
+        try:
+            return await app.state.memory.correct_peer_model(
+                bank_id,
+                observer_peer_id,
+                target_peer_id,
+                payload,
+                request_context=request_context,
+            )
+        except (PeerFeatureDisabledError, PeerNotFoundError, PeerConflictError, PeerValidationError) as error:
+            _raise_peer_http_error(error)
+
+    # =====================================================================
     # Bank Template Import / Export
     # =====================================================================
 
@@ -7926,6 +8262,8 @@ def _register_routes(app: FastAPI):
                     content_dict["tags"] = item.tags
                 if item.observation_scopes is not None:
                     content_dict["observation_scopes"] = item.observation_scopes
+                if item.peer_context is not None:
+                    content_dict["peer_context"] = item.peer_context.model_dump(exclude_none=True)
                 if item.update_mode is not None:
                     content_dict["update_mode"] = item.update_mode
                 strategy_groups[effective].append(content_dict)
