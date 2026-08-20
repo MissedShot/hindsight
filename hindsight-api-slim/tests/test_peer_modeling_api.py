@@ -176,6 +176,39 @@ async def test_peer_modeling_crud_context_and_manual_correction(api_client, memo
     assert "Target collects antique postcards." in context["representation"]
     assert [entry["text"] for entry in context["card"]["entries"]] == ["Target prefers illustrated gardening notes."]
 
+    manual_claim_id = correction["claims"][0]["id"]
+    unlock_response = await api_client.patch(
+        f"/v1/default/banks/{test_bank_id}/peers/{observer_id}/claims/{target_id}/{manual_claim_id}",
+        json={"locked": False},
+    )
+    assert unlock_response.status_code == 200, unlock_response.text
+    assert unlock_response.json()["claim"]["locked"] is False
+
+    lock_response = await api_client.patch(
+        f"/v1/default/banks/{test_bank_id}/peers/{observer_id}/claims/{target_id}/{manual_claim_id}",
+        json={"locked": True},
+    )
+    assert lock_response.status_code == 200, lock_response.text
+    assert lock_response.json()["claim"]["locked"] is True
+
+    retract_response = await api_client.delete(
+        f"/v1/default/banks/{test_bank_id}/peers/{observer_id}/claims/{target_id}/{manual_claim_id}"
+    )
+    assert retract_response.status_code == 200, retract_response.text
+    assert retract_response.json()["claim"]["status"] == "retracted"
+    assert retract_response.json()["model"]["card"]["entries"] == []
+
+    wrong_bank_delete_response = await api_client.delete(f"/v1/default/banks/not-{test_bank_id}/memories/{source_id}")
+    assert wrong_bank_delete_response.status_code == 404, wrong_bank_delete_response.text
+
+    delete_memory_response = await api_client.delete(f"/v1/default/banks/{test_bank_id}/memories/{source_id}")
+    assert delete_memory_response.status_code == 200, delete_memory_response.text
+    claims_response = await api_client.get(f"/v1/default/banks/{test_bank_id}/peers/{observer_id}/claims/{target_id}")
+    derived_claim = next(
+        claim for claim in claims_response.json()["items"] if claim["text"] == "Target collects antique postcards."
+    )
+    assert derived_claim["status"] == "superseded"
+
 
 class _BootstrapLLM:
     no_incremental_claims = False

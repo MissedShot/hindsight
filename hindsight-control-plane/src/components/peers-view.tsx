@@ -6,12 +6,15 @@ import { toast } from "sonner";
 import {
   ArrowRight,
   Check,
+  Lock,
   Loader2,
   Pencil,
   Plus,
   RefreshCw,
   RotateCcw,
   Sparkles,
+  Trash2,
+  Unlock,
   UsersRound,
 } from "lucide-react";
 import {
@@ -68,8 +71,21 @@ type BootstrapOperationStatus = {
   operation_id: string;
   status: "pending" | "processing" | "completed" | "failed" | "cancelled" | "not_found";
   error_message: string | null;
+  retry_count?: number | null;
+  next_retry_at?: string | null;
   progress?: OperationProgress | null;
   result_metadata?: Record<string, unknown> | null;
+};
+
+type PeerOperationListItem = {
+  id: string;
+  created_at: string;
+  updated_at?: string | null;
+  status: string;
+  error_message: string | null;
+  retry_count?: number | null;
+  next_retry_at?: string | null;
+  progress?: OperationProgress | null;
 };
 
 const EMPTY_PEER_FORM: PeerForm = { id: "", kind: "person", metadata: "" };
@@ -140,6 +156,15 @@ function getSourceIds(entry: Record<string, unknown>): string[] {
       .filter((sourceId): sourceId is string => typeof sourceId === "string");
   }
   return [];
+}
+
+function getMemorySourceIds(entry: Record<string, unknown>): string[] {
+  if (!Array.isArray(entry.sources)) return [];
+  return entry.sources
+    .map((source: unknown) => asRecord(source))
+    .filter((source): source is Record<string, unknown> => source?.source_kind === "memory_unit")
+    .map((source) => source.source_id)
+    .filter((sourceId): sourceId is string => typeof sourceId === "string");
 }
 
 function getOrigin(entry: Record<string, unknown>): string | null {
@@ -219,6 +244,7 @@ export function PeersView({ enabled }: { enabled: boolean }) {
   // Bootstrap polling backpressure: only one list→status chain runs at a time,
   // and a status is committed only when it matches the expected operation.
   const bootstrapPollingRef = useRef(false);
+  const refreshPollingRef = useRef(false);
   const expectedBootstrapOperationRef = useRef<string | null>(null);
   const [peers, setPeers] = useState<Peer[]>([]);
   const [loadingPeers, setLoadingPeers] = useState(false);
@@ -235,6 +261,12 @@ export function PeersView({ enabled }: { enabled: boolean }) {
   const [bootstrapStatus, setBootstrapStatus] = useState<BootstrapOperationStatus | null>(null);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [submittingBootstrap, setSubmittingBootstrap] = useState(false);
+  const [refreshStatus, setRefreshStatus] = useState<BootstrapOperationStatus | null>(null);
+  const [refreshHistory, setRefreshHistory] = useState<PeerOperationListItem[]>([]);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [peerCooldownSeconds, setPeerCooldownSeconds] = useState(0);
+  const [mutatingClaimId, setMutatingClaimId] = useState<string | null>(null);
+  const [deletingMemoryId, setDeletingMemoryId] = useState<string | null>(null);
 
   const [peerDialogOpen, setPeerDialogOpen] = useState(false);
   const [editingPeer, setEditingPeer] = useState<Peer | null>(null);
@@ -261,6 +293,7 @@ export function PeersView({ enabled }: { enabled: boolean }) {
   useEffect(() => {
     scopeGenerationRef.current += 1;
     bootstrapPollingRef.current = false;
+    refreshPollingRef.current = false;
     expectedBootstrapOperationRef.current = null;
     setPeers([]);
     setLoadingPeers(false);
@@ -277,6 +310,12 @@ export function PeersView({ enabled }: { enabled: boolean }) {
     setBootstrapStatus(null);
     setBootstrapError(null);
     setSubmittingBootstrap(false);
+    setRefreshStatus(null);
+    setRefreshHistory([]);
+    setRefreshError(null);
+    setPeerCooldownSeconds(0);
+    setMutatingClaimId(null);
+    setDeletingMemoryId(null);
     setCorrectionDialogOpen(false);
     setCorrectionText("");
     setCorrectionPlan(null);
@@ -388,6 +427,36 @@ export function PeersView({ enabled }: { enabled: boolean }) {
     }
   }, [currentBank, enabled, isCurrentScope]);
 
+  const loadRefreshStatus = useCallback(async () => {
+    if (!currentBank || !enabled || refreshPollingRef.current) return;
+    refreshPollingRef.current = true;
+    const generation = scopeGenerationRef.current;
+    try {
+      const [operations, config] = await Promise.all([
+        client.listOperations(currentBank, { type: "peer_model_refresh", limit: 5 }),
+        client.getBankConfig(currentBank),
+      ]);
+      if (!isCurrentScope(generation)) return;
+      const history = operations.operations as PeerOperationListItem[];
+      setRefreshHistory(history);
+      setPeerCooldownSeconds(Number(config.config.peer_model_cooldown_seconds ?? 0));
+      const latest = history[0];
+      if (!latest) {
+        setRefreshStatus(null);
+        setRefreshError(null);
+        return;
+      }
+      const status = await client.getOperationStatus(currentBank, latest.id);
+      if (!isCurrentScope(generation)) return;
+      setRefreshStatus(status);
+      setRefreshError(null);
+    } catch (error) {
+      if (isCurrentScope(generation)) setRefreshError(getErrorMessage(error));
+    } finally {
+      if (isCurrentScope(generation)) refreshPollingRef.current = false;
+    }
+  }, [currentBank, enabled, isCurrentScope]);
+
   const loadDirectionalContext = useCallback(async () => {
     if (!currentBank || !enabled || !observerId || !targetId) return;
     const generation = scopeGenerationRef.current;
@@ -417,6 +486,10 @@ export function PeersView({ enabled }: { enabled: boolean }) {
   }, [loadBootstrapStatus]);
 
   useEffect(() => {
+    void loadRefreshStatus();
+  }, [loadRefreshStatus]);
+
+  useEffect(() => {
     if (bootstrapStatus?.status !== "pending" && bootstrapStatus?.status !== "processing") return;
     const interval = window.setInterval(() => void loadBootstrapStatus(), 2000);
     return () => window.clearInterval(interval);
@@ -430,6 +503,15 @@ export function PeersView({ enabled }: { enabled: boolean }) {
   useEffect(() => {
     void loadDirectionalContext();
   }, [loadDirectionalContext]);
+
+  useEffect(() => {
+    if (refreshStatus?.status !== "pending" && refreshStatus?.status !== "processing") return;
+    const interval = window.setInterval(() => {
+      void loadRefreshStatus();
+      void loadDirectionalContext();
+    }, 3000);
+    return () => window.clearInterval(interval);
+  }, [refreshStatus?.status, loadRefreshStatus, loadDirectionalContext]);
 
   const openCreatePeer = () => {
     setEditingPeer(null);
@@ -605,6 +687,49 @@ export function PeersView({ enabled }: { enabled: boolean }) {
     }
   };
 
+  const toggleClaimLocked = async (claim: PeerClaim) => {
+    if (!currentBank || !observerId || !targetId) return;
+    const generation = scopeGenerationRef.current;
+    setMutatingClaimId(claim.id);
+    try {
+      await client.updatePeerClaim(currentBank, observerId, targetId, claim.id, !claim.locked);
+      if (!isCurrentScope(generation)) return;
+      toast.success(claim.locked ? t("claimUnlocked") : t("claimLocked"));
+      await loadDirectionalContext();
+    } finally {
+      if (isCurrentScope(generation)) setMutatingClaimId(null);
+    }
+  };
+
+  const deleteClaim = async (claim: PeerClaim) => {
+    if (!currentBank || !observerId || !targetId || !window.confirm(t("deleteClaimConfirm")))
+      return;
+    const generation = scopeGenerationRef.current;
+    setMutatingClaimId(claim.id);
+    try {
+      await client.deletePeerClaim(currentBank, observerId, targetId, claim.id);
+      if (!isCurrentScope(generation)) return;
+      toast.success(t("claimDeleted"));
+      await loadDirectionalContext();
+    } finally {
+      if (isCurrentScope(generation)) setMutatingClaimId(null);
+    }
+  };
+
+  const deleteMemorySource = async (memoryId: string) => {
+    if (!currentBank || !window.confirm(t("deleteMemoryConfirm"))) return;
+    const generation = scopeGenerationRef.current;
+    setDeletingMemoryId(memoryId);
+    try {
+      await client.deleteMemory(memoryId, currentBank);
+      if (!isCurrentScope(generation)) return;
+      toast.success(t("memoryDeleted"));
+      await loadDirectionalContext();
+    } finally {
+      if (isCurrentScope(generation)) setDeletingMemoryId(null);
+    }
+  };
+
   const claimGroups = useMemo(() => {
     const groups: Record<string, PeerClaim[]> = {
       active: [],
@@ -623,15 +748,33 @@ export function PeersView({ enabled }: { enabled: boolean }) {
     const sourceCount = getSourceCount(entry);
     const origin = getOrigin(entry);
     const sourceIds = getSourceIds(entry);
+    const memorySourceIds = new Set(getMemorySourceIds(entry));
     return (
       <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
         <span>{t("sourceCount", { count: sourceCount })}</span>
         {origin && <span className="rounded border border-border px-1.5 py-0.5">{origin}</span>}
-        {sourceIds.slice(0, 5).map((sourceId) => (
-          <span key={sourceId} className="rounded border border-border/70 px-1.5 py-0.5 font-mono">
-            {sourceId}
-          </span>
-        ))}
+        {sourceIds.slice(0, 5).map((sourceId) =>
+          memorySourceIds.has(sourceId) ? (
+            <button
+              key={sourceId}
+              type="button"
+              onClick={() => void deleteMemorySource(sourceId)}
+              disabled={deletingMemoryId === sourceId}
+              className="inline-flex items-center gap-1 rounded border border-border/70 px-1.5 py-0.5 font-mono hover:border-destructive/50 hover:text-destructive disabled:opacity-50"
+              title={t("deleteMemory")}
+            >
+              {sourceId}
+              <Trash2 className="h-3 w-3" />
+            </button>
+          ) : (
+            <span
+              key={sourceId}
+              className="rounded border border-border/70 px-1.5 py-0.5 font-mono"
+            >
+              {sourceId}
+            </span>
+          )
+        )}
         {sourceIds.length > 5 && <span>{t("moreSources", { count: sourceIds.length - 5 })}</span>}
         {entry.locked === true && (
           <span className="rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-amber-700 dark:text-amber-300">
@@ -649,11 +792,38 @@ export function PeersView({ enabled }: { enabled: boolean }) {
       <div key={claim.id} className="rounded-lg border border-border/70 bg-background/50 p-3">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <p className="text-sm text-foreground whitespace-pre-wrap">{getEntryText(entry)}</p>
-          {category && CARD_CATEGORIES.includes(category) && (
-            <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-xs text-muted-foreground">
-              {categoryLabels[category]}
-            </span>
-          )}
+          <div className="flex shrink-0 items-center gap-1">
+            {category && CARD_CATEGORIES.includes(category) && (
+              <span className="rounded border border-border px-1.5 py-0.5 text-xs text-muted-foreground">
+                {categoryLabels[category]}
+              </span>
+            )}
+            {claim.status === "active" && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void toggleClaimLocked(claim)}
+                  disabled={mutatingClaimId === claim.id}
+                  aria-label={claim.locked ? t("unlockClaim") : t("lockClaim")}
+                  title={claim.locked ? t("unlockClaim") : t("lockClaim")}
+                >
+                  {claim.locked ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void deleteClaim(claim)}
+                  disabled={mutatingClaimId === claim.id}
+                  aria-label={t("deleteClaim")}
+                  title={t("deleteClaim")}
+                  className="text-destructive hover:text-destructive"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </>
+            )}
+          </div>
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           {renderEvidence(entry)}
@@ -692,6 +862,16 @@ export function PeersView({ enabled }: { enabled: boolean }) {
           )
         : 0;
   const bootstrapResult = asRecord(bootstrapStatus?.result_metadata?.peer_bootstrap);
+  const refreshRunning =
+    refreshStatus?.status === "pending" || refreshStatus?.status === "processing";
+  const latestRefresh = refreshHistory[0];
+  const refreshDetail = refreshStatus?.progress?.detail;
+  const nextEligibleAt = latestRefresh
+    ? new Date(
+        new Date(latestRefresh.updated_at ?? latestRefresh.created_at).getTime() +
+          peerCooldownSeconds * 1000
+      )
+    : null;
 
   return (
     <div className="space-y-6">
@@ -732,6 +912,104 @@ export function PeersView({ enabled }: { enabled: boolean }) {
           </Button>
         </div>
       </div>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <CardTitle className="text-lg">{t("refreshStatusTitle")}</CardTitle>
+              <CardDescription>{t("refreshStatusDescription")}</CardDescription>
+            </div>
+            <span className="rounded-full border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground">
+              {t(`bootstrapStatus.${refreshStatus?.status ?? "notStarted"}`)}
+            </span>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-lg border border-border/70 px-3 py-2">
+              <p className="text-xs text-muted-foreground">{t("refreshStageLabel")}</p>
+              <p className="mt-1 text-sm font-medium">
+                {refreshStatus?.progress?.stage ?? t("notAvailable")}
+              </p>
+            </div>
+            <div className="rounded-lg border border-border/70 px-3 py-2">
+              <p className="text-xs text-muted-foreground">{t("lastAttemptLabel")}</p>
+              <p className="mt-1 text-sm font-medium">
+                {latestRefresh
+                  ? new Date(latestRefresh.created_at).toLocaleString()
+                  : t("notAvailable")}
+              </p>
+            </div>
+            <div className="rounded-lg border border-border/70 px-3 py-2">
+              <p className="text-xs text-muted-foreground">{t("nextEligibleLabel")}</p>
+              <p className="mt-1 text-sm font-medium">
+                {nextEligibleAt ? nextEligibleAt.toLocaleString() : t("notAvailable")}
+              </p>
+            </div>
+          </div>
+          {refreshRunning && (
+            <p className="text-xs text-muted-foreground">{t("refreshStillMutating")}</p>
+          )}
+          {refreshStatus?.progress && (
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              {refreshStatus.progress.processed != null && refreshStatus.progress.total != null && (
+                <span>
+                  {t("refreshPairsProcessed", {
+                    processed: refreshStatus.progress.processed,
+                    total: refreshStatus.progress.total,
+                  })}
+                </span>
+              )}
+              {typeof refreshDetail?.refreshed === "number" &&
+                typeof refreshDetail?.unchanged === "number" &&
+                typeof refreshDetail?.failed === "number" && (
+                  <span>
+                    {t("refreshOutcomeSummary", {
+                      refreshed: refreshDetail.refreshed,
+                      unchanged: refreshDetail.unchanged,
+                      failed: refreshDetail.failed,
+                    })}
+                  </span>
+                )}
+              <span>{t("refreshRetryCount", { count: refreshStatus.retry_count ?? 0 })}</span>
+              {refreshStatus.next_retry_at && (
+                <span>
+                  {t("refreshNextRetry", {
+                    date: new Date(refreshStatus.next_retry_at).toLocaleString(),
+                  })}
+                </span>
+              )}
+            </div>
+          )}
+          {refreshStatus?.status === "failed" && (
+            <Alert variant="destructive">
+              <AlertTitle>{t("refreshFailedTitle")}</AlertTitle>
+              <AlertDescription>{t("refreshFailedDescription")}</AlertDescription>
+            </Alert>
+          )}
+          {refreshError && (
+            <Alert variant="destructive">
+              <AlertTitle>{t("refreshErrorTitle")}</AlertTitle>
+              <AlertDescription>{refreshError}</AlertDescription>
+            </Alert>
+          )}
+          {refreshHistory.length > 0 && (
+            <div className="space-y-1">
+              {refreshHistory.map((item) => (
+                <div
+                  key={item.id}
+                  className="flex items-center justify-between gap-3 text-xs text-muted-foreground"
+                >
+                  <span className="truncate font-mono">{item.id}</span>
+                  <span>{t(`bootstrapStatus.${item.status}`)}</span>
+                  <span className="shrink-0">{new Date(item.created_at).toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader className="pb-3">

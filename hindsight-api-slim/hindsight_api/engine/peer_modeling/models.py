@@ -289,6 +289,19 @@ class PeerCorrectionResult(PeerModelBase):
     model: PeerModel
 
 
+class PeerClaimUpdate(PeerModelBase):
+    """Direct operator-controlled state for one persisted claim."""
+
+    locked: bool
+
+
+class PeerClaimMutationResult(PeerModelBase):
+    """Claim mutation plus the rematerialized directional model."""
+
+    claim: PeerClaim
+    model: PeerModel
+
+
 class PeerOperation(PeerModelBase):
     """Stable async-operation acknowledgement."""
 
@@ -358,6 +371,9 @@ class PeerMaterializationPlan(PeerModelBase):
     rebuild: bool = False
     supersede_claim_ids: list[str] = Field(default_factory=list)
     reactivate_claim_ids: list[str] = Field(default_factory=list)
+    retract_claim_ids: list[str] = Field(default_factory=list)
+    lock_claim_ids: list[str] = Field(default_factory=list)
+    unlock_claim_ids: list[str] = Field(default_factory=list)
     claims: list[PeerClaimWrite] = Field(default_factory=list)
     card_entries: list[PeerCardEntry] = Field(default_factory=list)
     representation: str

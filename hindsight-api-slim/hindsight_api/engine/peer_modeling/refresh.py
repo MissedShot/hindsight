@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 import re
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -19,6 +20,8 @@ from .models import (
     PeerModelRequest,
     PeerSourceKind,
 )
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from hindsight_api.engine.memory_engine import MemoryEngine
@@ -158,6 +161,13 @@ async def refresh_existing_peer_models(
     distiller = distill_async or distill_directional_claim_delta
     total_models = len(models)
     await memory_engine._write_operation_progress(operation_id, stage="refreshing", processed=0, total=total_models)
+    logger.info(
+        "[PEER_REFRESH] bank=%s operation=%s phase=started snapshot=%s models=%d",
+        bank_id,
+        operation_id,
+        snapshot.isoformat(),
+        total_models,
+    )
     outcomes: list[PeerRefreshPairOutcome] = []
     for processed_models, model in enumerate(models, start=1):
         try:
@@ -295,6 +305,23 @@ async def refresh_existing_peer_models(
                 )
             )
         finally:
+            outcome = outcomes[-1]
+            logger.log(
+                logging.WARNING if outcome.status == "failed" else logging.INFO,
+                "[PEER_REFRESH] bank=%s operation=%s pair=%s->%s status=%s version=%s->%s claims=%d "
+                "cursor_advanced=%s has_more=%s error_type=%s",
+                bank_id,
+                operation_id,
+                outcome.observer_peer_id,
+                outcome.target_peer_id,
+                outcome.status,
+                outcome.version_before,
+                outcome.version_after,
+                outcome.claims_materialized,
+                outcome.cursor_advanced,
+                outcome.has_more,
+                outcome.error,
+            )
             has_pending_window = any(outcome.has_more and outcome.status != "failed" for outcome in outcomes)
             result_status = _result_status(outcomes)
             if processed_models != total_models or has_pending_window:
@@ -308,8 +335,26 @@ async def refresh_existing_peer_models(
                 stage=progress_stage,
                 processed=processed_models,
                 total=total_models,
+                detail={
+                    "refreshed": sum(item.status == "refreshed" for item in outcomes),
+                    "unchanged": sum(item.status == "unchanged" for item in outcomes),
+                    "failed": sum(item.status == "failed" for item in outcomes),
+                    "has_more": has_pending_window,
+                },
             )
-    return PeerRefreshResult(status=_result_status(outcomes), pairs=outcomes)
+    result = PeerRefreshResult(status=_result_status(outcomes), pairs=outcomes)
+    logger.info(
+        "[PEER_REFRESH] bank=%s operation=%s phase=window_completed status=%s refreshed=%d unchanged=%d "
+        "failed=%d has_more=%s",
+        bank_id,
+        operation_id,
+        result.status,
+        sum(outcome.status == "refreshed" for outcome in outcomes),
+        sum(outcome.status == "unchanged" for outcome in outcomes),
+        sum(outcome.status == "failed" for outcome in outcomes),
+        any(outcome.has_more and outcome.status != "failed" for outcome in outcomes),
+    )
+    return result
 
 
 __all__ = ["PeerRefreshPairOutcome", "PeerRefreshResult", "refresh_existing_peer_models"]

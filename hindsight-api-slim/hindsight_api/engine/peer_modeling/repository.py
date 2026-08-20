@@ -801,6 +801,39 @@ class PeerRepository:
                         plan.bank_id,
                         _uuid_value(plan.model_id),
                     )
+                for claim_id in plan.retract_claim_ids:
+                    await conn.execute(
+                        f"""
+                        UPDATE {fq_table("peer_model_claims")}
+                        SET status = 'retracted', updated_at = NOW()
+                        WHERE bank_id = $1 AND model_id = $2 AND id = $3 AND status = 'active'
+                        """,
+                        plan.bank_id,
+                        _uuid_value(plan.model_id),
+                        _uuid_value(claim_id),
+                    )
+                for claim_id in plan.lock_claim_ids:
+                    await conn.execute(
+                        f"""
+                        UPDATE {fq_table("peer_model_claims")}
+                        SET locked = TRUE, updated_at = NOW()
+                        WHERE bank_id = $1 AND model_id = $2 AND id = $3 AND status = 'active'
+                        """,
+                        plan.bank_id,
+                        _uuid_value(plan.model_id),
+                        _uuid_value(claim_id),
+                    )
+                for claim_id in plan.unlock_claim_ids:
+                    await conn.execute(
+                        f"""
+                        UPDATE {fq_table("peer_model_claims")}
+                        SET locked = FALSE, updated_at = NOW()
+                        WHERE bank_id = $1 AND model_id = $2 AND id = $3 AND status = 'active'
+                        """,
+                        plan.bank_id,
+                        _uuid_value(plan.model_id),
+                        _uuid_value(claim_id),
+                    )
                 # Corrections target exact reviewed claim IDs. The former broad
                 # claim-type update allowed one ATTRIBUTE edit to supersede every
                 # unrelated attribute in the directional model.

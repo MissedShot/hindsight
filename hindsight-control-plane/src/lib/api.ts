@@ -69,6 +69,7 @@ export interface PeerClaim {
 
 export interface PeerCardEntry {
   id?: string;
+  claim_id?: string;
   text?: string | null;
   value?: string | null;
   claim?: string | null;
@@ -140,6 +141,11 @@ export interface PeerCorrectionResult {
   claims: PeerClaim[];
   superseded_claim_ids: string[];
   model: Record<string, unknown>;
+}
+
+export interface PeerClaimMutationResult {
+  claim: PeerClaim;
+  model: PeerModel;
 }
 
 export interface WebhookHttpConfig {
@@ -290,7 +296,7 @@ export interface OperationProgress {
   at: string;
   processed?: number | null;
   total?: number | null;
-  detail?: Record<string, number> | null;
+  detail?: Record<string, number | boolean> | null;
 }
 
 export type TagsMatch = "any" | "all" | "any_strict" | "all_strict" | "exact";
@@ -736,6 +742,8 @@ export class ControlPlaneClient {
         updated_at?: string | null;
         status: string;
         error_message: string | null;
+        retry_count?: number | null;
+        next_retry_at?: string | null;
         progress?: OperationProgress | null;
       }>;
     }>(`/api/operations/${encodeURIComponent(bankId)}${query ? `?${query}` : ""}`);
@@ -1174,6 +1182,13 @@ export class ControlPlaneClient {
       method: "PATCH",
       body: JSON.stringify(body),
     });
+  }
+
+  async deleteMemory(memoryId: string, bankId: string) {
+    return this.fetchApi<{ success: boolean; message: string; deleted_count: number }>(
+      memoryApi(memoryId, bankId),
+      { method: "DELETE" }
+    );
   }
 
   /**
@@ -2177,6 +2192,37 @@ export class ControlPlaneClient {
         bankId,
         `/peers/${encodeURIComponent(observerId)}/claims?target=${encodeURIComponent(targetId)}`
       )
+    );
+  }
+
+  async updatePeerClaim(
+    bankId: string,
+    observerId: string,
+    targetId: string,
+    claimId: string,
+    locked: boolean
+  ): Promise<PeerClaimMutationResult> {
+    return this.fetchApi<PeerClaimMutationResult>(
+      bankApi(
+        bankId,
+        `/peers/${encodeURIComponent(observerId)}/claims/${encodeURIComponent(claimId)}?target=${encodeURIComponent(targetId)}`
+      ),
+      { method: "PATCH", body: JSON.stringify({ locked }) }
+    );
+  }
+
+  async deletePeerClaim(
+    bankId: string,
+    observerId: string,
+    targetId: string,
+    claimId: string
+  ): Promise<PeerClaimMutationResult> {
+    return this.fetchApi<PeerClaimMutationResult>(
+      bankApi(
+        bankId,
+        `/peers/${encodeURIComponent(observerId)}/claims/${encodeURIComponent(claimId)}?target=${encodeURIComponent(targetId)}`
+      ),
+      { method: "DELETE" }
     );
   }
 

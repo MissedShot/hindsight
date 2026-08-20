@@ -182,7 +182,9 @@ from hindsight_api.engine.peer_modeling.errors import (
 )
 from hindsight_api.engine.peer_modeling.models import (
     Peer,
+    PeerClaimMutationResult,
     PeerClaims,
+    PeerClaimUpdate,
     PeerContext,
     PeerCorrectionApplyRequest,
     PeerCorrectionPlan,
@@ -4593,6 +4595,32 @@ def _register_routes(app: FastAPI):
             logger.error(f"Error in PATCH /v1/default/banks/{bank_id}/memories/{memory_id}: {error_detail}")
             raise HTTPException(status_code=500, detail=str(e))
 
+    @app.delete(
+        "/v1/default/banks/{bank_id}/memories/{memory_id}",
+        response_model=DeleteResponse,
+        operation_id="delete_memory",
+        tags=["Memory"],
+    )
+    @audited("delete_memory", request_param=None)
+    async def api_delete_memory(
+        bank_id: str,
+        memory_id: str,
+        request_context: RequestContext = Depends(get_request_context),
+    ):
+        try:
+            result = await app.state.memory.delete_memory_unit(
+                memory_id,
+                bank_id=bank_id,
+                request_context=request_context,
+            )
+            if not result["success"]:
+                raise HTTPException(status_code=404, detail=f"Memory unit '{memory_id}' not found")
+            return DeleteResponse(success=True, message=result["message"], deleted_count=1)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        except (AuthenticationError, HTTPException):
+            raise
+
     @app.get(
         "/v1/default/banks/{bank_id}/memories/{memory_id}/history",
         summary="Get observation history",
@@ -7175,6 +7203,56 @@ def _register_routes(app: FastAPI):
                 bank_id,
                 observer_peer_id,
                 target_peer_id,
+                request_context=request_context,
+            )
+        except (PeerFeatureDisabledError, PeerNotFoundError, PeerValidationError) as error:
+            _raise_peer_http_error(error)
+
+    @app.patch(
+        "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/claims/{target_peer_id}/{claim_id}",
+        response_model=PeerClaimMutationResult,
+        operation_id="update_peer_claim",
+        tags=["Peer Modeling"],
+    )
+    async def api_update_peer_claim(
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        claim_id: str,
+        payload: PeerClaimUpdate,
+        request_context: RequestContext = Depends(get_request_context),
+    ):
+        try:
+            return await app.state.memory.update_peer_claim(
+                bank_id,
+                observer_peer_id,
+                target_peer_id,
+                claim_id,
+                locked=payload.locked,
+                request_context=request_context,
+            )
+        except (PeerFeatureDisabledError, PeerNotFoundError, PeerValidationError) as error:
+            _raise_peer_http_error(error)
+
+    @app.delete(
+        "/v1/default/banks/{bank_id}/peers/{observer_peer_id}/claims/{target_peer_id}/{claim_id}",
+        response_model=PeerClaimMutationResult,
+        operation_id="delete_peer_claim",
+        tags=["Peer Modeling"],
+    )
+    async def api_delete_peer_claim(
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        claim_id: str,
+        request_context: RequestContext = Depends(get_request_context),
+    ):
+        try:
+            return await app.state.memory.delete_peer_claim(
+                bank_id,
+                observer_peer_id,
+                target_peer_id,
+                claim_id,
                 request_context=request_context,
             )
         except (PeerFeatureDisabledError, PeerNotFoundError, PeerValidationError) as error:

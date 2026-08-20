@@ -3,7 +3,7 @@ import { dataplaneBankUrl, getDataplaneHeaders } from "@/lib/hindsight-client";
 import { localizeApiErrorPayload } from "@/lib/i18n/api-errors";
 
 interface ProxyOptions {
-  method?: "GET" | "POST" | "PATCH";
+  method?: "GET" | "POST" | "PATCH" | "DELETE";
   body?: unknown;
   errorKey: string;
   fallbackMessage: string;

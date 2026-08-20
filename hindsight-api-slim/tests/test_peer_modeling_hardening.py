@@ -158,6 +158,48 @@ def test_representation_respects_configured_token_cap():
     assert len(_get_tiktoken_encoding().encode(plan.representation)) <= 12
 
 
+def test_card_selection_rotates_across_available_claim_types() -> None:
+    service = PeerModelingService(cast(PeerRepository, object()), max_card_entries=4)
+    claim_types = [
+        PeerClaimType.IDENTITY,
+        PeerClaimType.IDENTITY,
+        PeerClaimType.IDENTITY,
+        PeerClaimType.IDENTITY,
+        PeerClaimType.ATTRIBUTE,
+        PeerClaimType.RELATIONSHIP,
+        PeerClaimType.INSTRUCTION,
+    ]
+    plan = service._build_plan(
+        bank_id="bank",
+        observer_peer_id="11111111-1111-1111-1111-111111111111",
+        target_peer_id="22222222-2222-2222-2222-222222222222",
+        model=None,
+        claims=[],
+        new_claims=[
+            PeerClaimWrite(
+                id=f"33333333-3333-3333-3333-{index:012d}",
+                claim_type=claim_type,
+                text=f"Synthetic {claim_type.value.lower()} claim {index}",
+                confidence=0.95,
+                origin=PeerClaimOrigin.DERIVED,
+                locked=False,
+                provenance="test",
+                source_kind=PeerSourceKind.MEMORY_UNIT,
+                source_ids=["44444444-4444-4444-4444-444444444444"],
+            )
+            for index, claim_type in enumerate(claim_types, start=1)
+        ],
+        supersede_claim_ids=[],
+    )
+
+    assert [entry.claim_type for entry in plan.card_entries] == [
+        PeerClaimType.IDENTITY,
+        PeerClaimType.ATTRIBUTE,
+        PeerClaimType.RELATIONSHIP,
+        PeerClaimType.INSTRUCTION,
+    ]
+
+
 def test_pattern_source_minimum_is_enforced_after_llm_output():
     direct = _FinalClaim(
         claim_type=PeerClaimType.IDENTITY,

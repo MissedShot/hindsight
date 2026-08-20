@@ -414,6 +414,7 @@ if TYPE_CHECKING:
     from .audit import AuditLogListResponse, AuditLogStatsResponse
     from .peer_modeling.models import (
         Peer,
+        PeerClaimMutationResult,
         PeerClaims,
         PeerContext,
         PeerCorrectionApplyRequest,
@@ -7871,6 +7872,7 @@ class MemoryEngine(MemoryEngineInterface):
         Raises:
             ValueError: If unit_id is not a valid UUID
         """
+        requested_bank_id = bank_id
         try:
             unit_uuid = uuid.UUID(unit_id)
         except ValueError:
@@ -7890,10 +7892,17 @@ class MemoryEngine(MemoryEngineInterface):
 
                 _store = get_memories()
                 if _store.writes_memory_rows_in_sql_for(bank_id):
-                    row = await conn.fetchrow(
-                        f"SELECT bank_id, fact_type FROM {fq_table('memory_units')} WHERE id = $1",
-                        str(unit_uuid),
-                    )
+                    if requested_bank_id is None:
+                        row = await conn.fetchrow(
+                            f"SELECT bank_id, fact_type FROM {fq_table('memory_units')} WHERE id = $1",
+                            str(unit_uuid),
+                        )
+                    else:
+                        row = await conn.fetchrow(
+                            f"SELECT bank_id, fact_type FROM {fq_table('memory_units')} WHERE id = $1 AND bank_id = $2",
+                            str(unit_uuid),
+                            requested_bank_id,
+                        )
                     bank_id = row["bank_id"] if row else None
                     fact_type = row["fact_type"] if row else None
                 else:
@@ -7925,9 +7934,16 @@ class MemoryEngine(MemoryEngineInterface):
                 # racing insert committed between the sweep and the delete would
                 # leave an orphan referencing this just-deleted source memory).
                 if _store.writes_memory_rows_in_sql_for(bank_id):
-                    deleted = await conn.fetchval(
-                        f"DELETE FROM {fq_table('memory_units')} WHERE id = $1 RETURNING id", unit_id
-                    )
+                    if requested_bank_id is None:
+                        deleted = await conn.fetchval(
+                            f"DELETE FROM {fq_table('memory_units')} WHERE id = $1 RETURNING id", unit_id
+                        )
+                    else:
+                        deleted = await conn.fetchval(
+                            f"DELETE FROM {fq_table('memory_units')} WHERE id = $1 AND bank_id = $2 RETURNING id",
+                            unit_id,
+                            requested_bank_id,
+                        )
                 else:
                     deleted = unit_id if fact_type is not None else None
                     if deleted:
@@ -17279,6 +17295,37 @@ class MemoryEngine(MemoryEngineInterface):
         service = await self._peer_modeling_service(bank_id, request_context)
         claims = await service.get_claims(bank_id, observer_peer_id, target_peer_id)
         return PeerClaims(observer_peer_id=observer_peer_id, target_peer_id=target_peer_id, items=claims)
+
+    async def update_peer_claim(
+        self,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        claim_id: str,
+        *,
+        locked: bool,
+        request_context: "RequestContext",
+    ) -> "PeerClaimMutationResult":
+        service = await self._peer_modeling_service(bank_id, request_context)
+        return await service.set_claim_locked(
+            bank_id,
+            observer_peer_id,
+            target_peer_id,
+            claim_id,
+            locked=locked,
+        )
+
+    async def delete_peer_claim(
+        self,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        claim_id: str,
+        *,
+        request_context: "RequestContext",
+    ) -> "PeerClaimMutationResult":
+        service = await self._peer_modeling_service(bank_id, request_context)
+        return await service.retract_claim(bank_id, observer_peer_id, target_peer_id, claim_id)
 
     async def plan_peer_correction(
         self,

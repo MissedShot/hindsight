@@ -19,6 +19,7 @@ from .models import (
     PeerCardEntry,
     PeerClaim,
     PeerClaimDraft,
+    PeerClaimMutationResult,
     PeerClaimOrigin,
     PeerClaimStatus,
     PeerClaimType,
@@ -147,6 +148,80 @@ class PeerModelingService:
             representation=model.representation,
             claims=claims,
         )
+
+    async def set_claim_locked(
+        self,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        claim_id: str,
+        *,
+        locked: bool,
+    ) -> PeerClaimMutationResult:
+        return await self._mutate_claim(
+            bank_id,
+            observer_peer_id,
+            target_peer_id,
+            claim_id,
+            locked=locked,
+        )
+
+    async def retract_claim(
+        self,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        claim_id: str,
+    ) -> PeerClaimMutationResult:
+        return await self._mutate_claim(bank_id, observer_peer_id, target_peer_id, claim_id, retract=True)
+
+    async def _mutate_claim(
+        self,
+        bank_id: str,
+        observer_peer_id: str,
+        target_peer_id: str,
+        claim_id: str,
+        *,
+        locked: bool | None = None,
+        retract: bool = False,
+    ) -> PeerClaimMutationResult:
+        await self._ensure_pair(bank_id, observer_peer_id, target_peer_id)
+        state = await self._load_model_and_claims(bank_id, observer_peer_id, target_peer_id)
+        if state.model is None:
+            raise PeerNotFoundError("Directional peer model must exist before mutating a claim")
+        claim = next(
+            (item for item in state.claims if item.id == claim_id and item.status == PeerClaimStatus.ACTIVE),
+            None,
+        )
+        if claim is None:
+            raise PeerNotFoundError("Active claim was not found in the selected directional model")
+
+        updated_claim = claim.model_copy(
+            update={"status": PeerClaimStatus.RETRACTED} if retract else {"locked": locked}
+        )
+        projected_claims = [updated_claim if item.id == claim_id else item for item in state.claims]
+        plan = self._build_plan(
+            bank_id=bank_id,
+            observer_peer_id=observer_peer_id,
+            target_peer_id=target_peer_id,
+            model=state.model,
+            claims=projected_claims,
+            new_claims=[],
+            supersede_claim_ids=[],
+            retract_claim_ids=[claim_id] if retract else [],
+            lock_claim_ids=[claim_id] if locked is True else [],
+            unlock_claim_ids=[claim_id] if locked is False else [],
+        )
+        await self.repository.apply_materialization(plan)
+        persisted_claim = await self.repository.get_claim(bank_id=bank_id, claim_id=claim_id)
+        persisted_model = await self.repository.get_directional_model(
+            bank_id=bank_id,
+            observer_peer_id=observer_peer_id,
+            target_peer_id=target_peer_id,
+        )
+        if persisted_claim is None or persisted_model is None:
+            raise PeerNotFoundError("Claim mutation was not materialized")
+        return PeerClaimMutationResult(claim=persisted_claim, model=persisted_model)
 
     async def apply_correction(
         self,
@@ -569,6 +644,9 @@ class PeerModelingService:
         new_claims: list[PeerClaimWrite],
         supersede_claim_ids: list[str],
         reactivate_claim_ids: list[str] | None = None,
+        retract_claim_ids: list[str] | None = None,
+        lock_claim_ids: list[str] | None = None,
+        unlock_claim_ids: list[str] | None = None,
         source_cursor: datetime | None = None,
         source_cursor_id: str | None = None,
     ) -> PeerMaterializationPlan:
@@ -683,7 +761,10 @@ class PeerModelingService:
         card_candidates.sort(key=self._card_sort_key)
         locked_entries = [entry for entry in card_candidates if entry.locked]
         unlocked_entries = [entry for entry in card_candidates if not entry.locked]
-        card_entries = locked_entries + unlocked_entries[: max(0, self.max_card_entries - len(locked_entries))]
+        card_entries = locked_entries + self._balanced_card_entries(
+            unlocked_entries,
+            max(0, self.max_card_entries - len(locked_entries)),
+        )
         representation_candidates = [
             _RepresentationCandidate(
                 claim_type=claim.claim_type,
@@ -704,6 +785,9 @@ class PeerModelingService:
             version=version,
             supersede_claim_ids=sorted(supersede_ids),
             reactivate_claim_ids=sorted(reactivate_ids),
+            retract_claim_ids=sorted(set(retract_claim_ids or [])),
+            lock_claim_ids=sorted(set(lock_claim_ids or [])),
+            unlock_claim_ids=sorted(set(unlock_claim_ids or [])),
             claims=plan_claims,
             card_entries=card_entries,
             representation=self._representation_text(representation_candidates),
@@ -773,7 +857,13 @@ class PeerModelingService:
         return result
 
     def _plan_needs_apply(self, plan: PeerMaterializationPlan, model: PeerModel, claims: list[PeerClaim]) -> bool:
-        if plan.supersede_claim_ids or plan.reactivate_claim_ids:
+        if (
+            plan.supersede_claim_ids
+            or plan.reactivate_claim_ids
+            or plan.retract_claim_ids
+            or plan.lock_claim_ids
+            or plan.unlock_claim_ids
+        ):
             return True
         active_by_id = {claim.id: claim for claim in claims if claim.status == PeerClaimStatus.ACTIVE}
         for write in plan.claims:
@@ -790,6 +880,27 @@ class PeerModelingService:
     @staticmethod
     def _card_sort_key(entry: PeerCardEntry) -> list[int | float | str]:
         return [0 if entry.locked else 1, _CLAIM_TYPE_ORDER[entry.claim_type], -entry.confidence, entry.claim_id]
+
+    @staticmethod
+    def _balanced_card_entries(entries: list[PeerCardEntry], limit: int) -> list[PeerCardEntry]:
+        """Rotate through populated claim types so type ordering cannot starve later fields."""
+        buckets = {claim_type: [] for claim_type in _CLAIM_TYPE_ORDER}
+        for entry in entries:
+            buckets[entry.claim_type].append(entry)
+        for bucket in buckets.values():
+            bucket.sort(key=lambda entry: (-entry.confidence, entry.claim_id))
+
+        selected: list[PeerCardEntry] = []
+        while len(selected) < limit:
+            added = False
+            for claim_type in _CLAIM_TYPE_ORDER:
+                bucket = buckets[claim_type]
+                if bucket and len(selected) < limit:
+                    selected.append(bucket.pop(0))
+                    added = True
+            if not added:
+                break
+        return selected
 
     @staticmethod
     def _representation_sort_key(entry: _RepresentationCandidate) -> list[int | float | str]:

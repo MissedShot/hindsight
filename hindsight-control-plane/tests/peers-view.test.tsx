@@ -65,6 +65,7 @@ vi.mock("@/lib/api", () => ({
     getPeerClaims: (...args: unknown[]) => getPeerClaimsMock(...args),
     listOperations: (...args: unknown[]) => listOperationsMock(...args),
     getOperationStatus: (...args: unknown[]) => getOperationStatusMock(...args),
+    getBankConfig: vi.fn().mockResolvedValue({ config: { peer_model_cooldown_seconds: 0 } }),
     planPeerCorrection: (...args: unknown[]) => planPeerCorrectionMock(...args),
     createPeerCorrection: (...args: unknown[]) => createPeerCorrectionMock(...args),
   },
@@ -138,7 +139,10 @@ describe("PeersView scope guards", () => {
     await recheck.promise;
     await flush(6);
     // Stale op-a status must not be committed as the current bootstrap status.
-    expect(listOperationsMock).toHaveBeenCalledTimes(2);
+    const bootstrapCalls = listOperationsMock.mock.calls.filter(
+      (call: unknown[]) => (call[1] as { type?: string } | undefined)?.type === "peer_bootstrap"
+    );
+    expect(bootstrapCalls).toHaveLength(2);
     expect(screen.queryByText("op-a")).toBeNull();
   });
 

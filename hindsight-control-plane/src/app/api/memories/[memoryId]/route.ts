@@ -130,3 +130,50 @@ export async function PATCH(
     );
   }
 }
+
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ memoryId: string }> }
+) {
+  try {
+    const { memoryId } = await params;
+    const bankId = request.nextUrl.searchParams.get("bank_id");
+    if (!bankId) {
+      return NextResponse.json(
+        localizeApiErrorPayload(request, {
+          error: "bank_id is required",
+          errorKey: "api.errors.validation.bankIdRequired",
+        }),
+        { status: 400 }
+      );
+    }
+
+    const response = await fetch(
+      dataplaneBankUrl(bankId, `/memories/${encodeURIComponent(memoryId)}`),
+      {
+        method: "DELETE",
+        headers: getDataplaneHeaders({ "Content-Type": "application/json" }),
+      }
+    );
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return NextResponse.json(
+        localizeApiErrorPayload(request, {
+          error: payload.detail || `API returned ${response.status}`,
+          errorKey: "api.errors.memories.update",
+        }),
+        { status: response.status }
+      );
+    }
+    return NextResponse.json(payload, { status: 200 });
+  } catch (error) {
+    console.error("Error deleting memory:", error);
+    return NextResponse.json(
+      localizeApiErrorPayload(request, {
+        error: "Failed to delete memory",
+        errorKey: "api.errors.memories.update",
+      }),
+      { status: 500 }
+    );
+  }
+}
