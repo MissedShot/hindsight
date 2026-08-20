@@ -44,6 +44,7 @@ _MAX_CURRENT_SOURCE_IDS_PER_CLAIM = 16
 _MAX_INCREMENTAL_CURRENT_CLAIM_TEXT = 4_000
 _MAX_INCREMENTAL_SYNTHESIS_USER_BYTES = 128_000
 _MAX_EXTRACTION_MESSAGES_BYTES = 128_000
+_MAX_PROVENANCE_ATTEMPTS = 4
 
 
 class _DiscoveredPeer(BaseModel):
@@ -607,24 +608,28 @@ async def distill_directional_claim_delta(
     rows = _relevant_rows(rows, target)
     if not rows:
         return PeerClaimDelta()
-    extracted = await _extract_claim_batch(llm=llm, observer=observer, peers=[target], rows=rows)
     valid_ids = {str(row["id"]) for row in rows}
+    extracted = await _extract_claim_batch(llm=llm, observer=observer, peers=[target], rows=rows)
+    for retry in range(1, _MAX_PROVENANCE_ATTEMPTS):
+        if all(source_id in valid_ids for claim in extracted.claims for source_id in claim.source_ids):
+            break
+        # Keep the provenance check fail-closed, but retry the same immutable window because
+        # structured LLM output can transiently alter an otherwise valid evidence identifier.
+        logger.warning(
+            "[PEER_REFRESH] incremental extraction returned an invalid source; retry=%d/%d",
+            retry,
+            _MAX_PROVENANCE_ATTEMPTS - 1,
+        )
+        extracted = await _extract_claim_batch(llm=llm, observer=observer, peers=[target], rows=rows)
+    if any(source_id not in valid_ids for claim in extracted.claims for source_id in claim.source_ids):
+        raise ValueError("distiller returned a source outside the immutable refresh snapshot")
     proposals: list[_ExtractedClaim] = []
     for claim in extracted.claims:
-        if any(source_id not in valid_ids for source_id in claim.source_ids):
-            raise ValueError("distiller returned a source outside the immutable refresh snapshot")
         if claim.target_external_id.casefold() != target.external_id.casefold():
             continue
         claim.source_ids = list(dict.fromkeys(claim.source_ids))
         if claim.source_ids:
             proposals.append(claim)
-    final_claims = await _synthesize_claims(
-        llm=llm,
-        peer=target,
-        proposals=proposals,
-        current_claims=current_claims,
-        max_card_entries=config.peer_model_max_card_entries,
-    )
     source_pool = {str(source_id) for source_id in source_ids}
     source_pool.update(
         source.source_id
@@ -633,6 +638,30 @@ async def distill_directional_claim_delta(
         for source in claim.sources
         if source.source_kind.value == "memory_unit"
     )
+    final_claims = await _synthesize_claims(
+        llm=llm,
+        peer=target,
+        proposals=proposals,
+        current_claims=current_claims,
+        max_card_entries=config.peer_model_max_card_entries,
+    )
+    for retry in range(1, _MAX_PROVENANCE_ATTEMPTS):
+        if all(source_id in source_pool for claim in final_claims for source_id in claim.source_ids):
+            break
+        logger.warning(
+            "[PEER_REFRESH] incremental synthesis returned an invalid source; retry=%d/%d",
+            retry,
+            _MAX_PROVENANCE_ATTEMPTS - 1,
+        )
+        final_claims = await _synthesize_claims(
+            llm=llm,
+            peer=target,
+            proposals=proposals,
+            current_claims=current_claims,
+            max_card_entries=config.peer_model_max_card_entries,
+        )
+    if any(source_id not in source_pool for claim in final_claims for source_id in claim.source_ids):
+        raise ValueError("distiller returned a source outside the server-derived allowlist")
     drafts: list[PeerClaimDraft] = []
     supersede_claim_ids: list[str] = []
     for claim in final_claims:

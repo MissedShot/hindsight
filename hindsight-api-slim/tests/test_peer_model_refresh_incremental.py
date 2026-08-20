@@ -18,6 +18,7 @@ from hindsight_api.engine.peer_modeling.bootstrap import (
     _IncrementalFinalClaim,
     _IncrementalFinalClaims,
     _synthesize_claims,
+    distill_directional_claim_delta,
     distill_directional_claims,
 )
 from hindsight_api.engine.peer_modeling.models import (
@@ -879,6 +880,91 @@ async def test_legacy_distiller_processes_role_scoped_evidence_without_target_al
 
     assert [draft.text for draft in drafts] == ["role-scoped evidence"]
     assert [response_format for _messages, response_format in llm_calls] == [_ClaimBatch, _FinalClaims]
+
+
+@pytest.mark.asyncio
+async def test_incremental_distiller_retries_transient_invalid_sources_in_both_stages() -> None:
+    config = SimpleNamespace(peer_model_max_card_entries=12, peer_model_min_pattern_sources=2)
+    responses = [
+        _ClaimBatch(
+            claims=[
+                _ExtractedClaim(
+                    target_external_id="target-a",
+                    claim_type=PeerClaimType.ATTRIBUTE,
+                    text="Target preference",
+                    source_ids=["invented-source"],
+                )
+            ]
+        ),
+        _ClaimBatch(
+            claims=[
+                _ExtractedClaim(
+                    target_external_id="target-a",
+                    claim_type=PeerClaimType.ATTRIBUTE,
+                    text="Target preference",
+                    source_ids=["invented-source"],
+                )
+            ]
+        ),
+        _ClaimBatch(
+            claims=[
+                _ExtractedClaim(
+                    target_external_id="target-a",
+                    claim_type=PeerClaimType.ATTRIBUTE,
+                    text="Target preference",
+                    source_ids=["source"],
+                )
+            ]
+        ),
+        _IncrementalFinalClaims(
+            claims=[
+                _IncrementalFinalClaim(
+                    claim_type=PeerClaimType.ATTRIBUTE,
+                    text="Target preference",
+                    source_ids=["invented-source"],
+                    card_eligible=True,
+                )
+            ]
+        ),
+        _IncrementalFinalClaims(
+            claims=[
+                _IncrementalFinalClaim(
+                    claim_type=PeerClaimType.ATTRIBUTE,
+                    text="Target preference",
+                    source_ids=["source"],
+                    card_eligible=True,
+                )
+            ]
+        ),
+    ]
+
+    async def llm_call(_messages: list[dict[str, str]], **_kwargs: Any) -> Any:
+        return responses.pop(0)
+
+    engine = cast(
+        MemoryEngine,
+        SimpleNamespace(
+            _config_resolver=SimpleNamespace(resolve_full_config=AsyncMock(return_value=config)),
+            _consolidation_llm_config=SimpleNamespace(
+                with_config=lambda *_args, **_kwargs: SimpleNamespace(call=llm_call)
+            ),
+        ),
+    )
+
+    delta = await distill_directional_claim_delta(
+        memory_engine=engine,
+        service=SimpleNamespace(),
+        bank_id="bank",
+        observer=_peer(OBSERVER_ID, "observer"),
+        target=_peer(TARGET_A_ID, "target-a"),
+        source_ids=["source"],
+        source_rows=[_memory_source("source", NOW, "target-a prefers tea")],
+        current_claims=[],
+        request_context=cast(Any, object()),
+    )
+
+    assert [claim.source_ids for claim in delta.claims] == [["source"]]
+    assert responses == []
 
 
 @pytest.mark.asyncio
