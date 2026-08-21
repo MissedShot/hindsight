@@ -506,6 +506,7 @@
       "fileConvertRetain": "Convert File",
       "webhookDelivery": "Webhook Delivery",
       "graphMaintenance": "Graph Maintenance",
+      "peerModelRefresh": "Peer Cards Refresh",
       "exportDocuments": "Export Documents",
       "importDocuments": "Import Documents"
     },

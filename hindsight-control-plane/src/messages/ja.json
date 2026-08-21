@@ -506,6 +506,7 @@
       "fileConvertRetain": "ファイル変換",
       "webhookDelivery": "Webhook 配信",
       "graphMaintenance": "グラフメンテナンス",
+      "peerModelRefresh": "ピアモデルの更新",
       "exportDocuments": "ドキュメントのエクスポート",
       "importDocuments": "ドキュメントのインポート"
     },
