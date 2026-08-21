@@ -494,22 +494,22 @@ function BankSelectorInner() {
   };
 
   return (
-    <div className="bg-card text-card-foreground px-5 py-3 border-b-4 border-primary-gradient">
-      <div className="flex items-center gap-4 text-sm">
+    <div className="bg-card text-card-foreground px-3 py-3 sm:px-5 border-b-4 border-primary-gradient">
+      <div className="flex min-w-0 items-center gap-2 text-sm sm:gap-4">
         {/* Logo, split so only the mark spins on navigation while the wordmark
             stays put. The mark is the standalone favicon.png (so it can rotate
             freely); the wordmark is the right slice of the full lockup (logo.png)
             shown via a cropped background. Their widths sum to the full logo, so
             the two pieces butt together seamlessly at h-10. */}
-        <div className="flex items-center h-10 select-none" aria-label="Hindsight">
+        <div className="flex h-10 shrink-0 items-center select-none" aria-label="Hindsight">
           <img
             src={withBasePath("/favicon.png")}
             alt=""
-            className={cn("h-10 w-auto", logoSpinning && "animate-logo-wiggle")}
+            className={cn("h-8 w-auto sm:h-10", logoSpinning && "animate-logo-wiggle")}
             onAnimationEnd={() => setLogoSpinning(false)}
           />
           <div
-            className="h-10 w-[99px]"
+            className="hidden h-10 w-[99px] md:block"
             style={{
               backgroundImage: `url(${withBasePath("/logo.png")})`,
               backgroundSize: "auto 100%",
@@ -520,7 +520,7 @@ function BankSelectorInner() {
         </div>
 
         {/* Separator */}
-        <div className="h-8 w-px bg-border" />
+        <div className="hidden h-8 w-px bg-border sm:block" />
 
         {/* Memory Bank Selector */}
         <Popover
@@ -535,7 +535,7 @@ function BankSelectorInner() {
               variant="outline"
               role="combobox"
               aria-expanded={open}
-              className="w-[250px] justify-between font-bold border-2 border-primary hover:bg-accent"
+              className="min-w-0 flex-1 justify-between border-2 border-primary font-bold hover:bg-accent sm:w-[250px] sm:flex-none"
             >
               <span className="truncate">
                 {bankInfos.find((b) => b.bank_id === currentBank)?.name ||
@@ -545,7 +545,7 @@ function BankSelectorInner() {
               <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="w-[420px] p-0" align="start">
+          <PopoverContent className="w-[min(420px,calc(100vw-24px))] p-0" align="start">
             <Command>
               {sortedBanks.length > 0 && <CommandInput placeholder={tNavBank("search")} />}
               <CommandList>
@@ -656,32 +656,32 @@ function BankSelectorInner() {
         </Popover>
 
         {/* Separator */}
-        <div className="h-8 w-px bg-border" />
+        <div className="hidden h-8 w-px bg-border md:block" />
 
         {/* Add Document Button */}
         {currentBank && (
           <Button
             variant="outline"
             size="sm"
-            className="h-9 gap-1.5"
+            className="h-9 shrink-0 gap-1.5 px-2 md:px-3"
             onClick={() => setDocDialogOpen(true)}
             title={tAddDocument("addDocumentToCurrentBank")}
             data-add-document
           >
             <Plus className="h-4 w-4" />
-            <span>{tAddDocument("addDocumentButton")}</span>
+            <span className="hidden md:inline">{tAddDocument("addDocumentButton")}</span>
           </Button>
         )}
 
         {/* Spacer */}
-        <div className="flex-1" />
+        <div className="min-w-0 flex-1" />
 
         {/* GitHub Link */}
         <a
           href="https://github.com/vectorize-io/hindsight"
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
+          className="hidden items-center gap-2 rounded-lg px-2 py-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:flex xl:px-3"
           title={tNav("viewOnGitHub")}
         >
           <Github className="h-5 w-5" />
@@ -689,7 +689,7 @@ function BankSelectorInner() {
         </a>
 
         {/* Separator */}
-        <div className="h-8 w-px bg-border" />
+        <div className="hidden h-8 w-px bg-border xl:block" />
 
         {/* Dark Mode Toggle */}
         <Button

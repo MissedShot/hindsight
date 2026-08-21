@@ -25,7 +25,8 @@ describe("bank peer proxy routes", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     dataplaneBankUrl.mockImplementation(
-      (bankId: string, suffix: string) => `https://dataplane.test/v1/default/banks/${encodeURIComponent(bankId)}${suffix}`
+      (bankId: string, suffix: string) =>
+        `https://dataplane.test/v1/default/banks/${encodeURIComponent(bankId)}${suffix}`
     );
   });
 
@@ -35,7 +36,7 @@ describe("bank peer proxy routes", () => {
     );
 
     const response = await GET(
-      new Request("http://localhost/api/banks/agent%3A%2F%25/peers"),
+      new Request("http://localhost/api/banks/agent%3A%2F%25/peers?limit=100&offset=200"),
       params("agent:/%")
     );
 
@@ -43,14 +44,16 @@ describe("bank peer proxy routes", () => {
     await expect(response.json()).resolves.toEqual({
       items: [{ id: "self", kind: "agent" }],
     });
-    expect(dataplaneBankUrl).toHaveBeenCalledWith("agent:/%", "/peers");
+    expect(dataplaneBankUrl).toHaveBeenCalledWith("agent:/%", "/peers?limit=100&offset=200");
     expect(getDataplaneHeaders).toHaveBeenCalledWith({ "Content-Type": "application/json" });
   });
 
   it("forwards create bodies and preserves structured upstream errors", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
-      .mockResolvedValue(new Response(JSON.stringify({ detail: "peer id already exists" }), { status: 409 }));
+      .mockResolvedValue(
+        new Response(JSON.stringify({ detail: "peer id already exists" }), { status: 409 })
+      );
 
     const response = await POST(
       new Request("http://localhost/api/banks/bank/peers", {
@@ -78,7 +81,9 @@ describe("bank peer proxy routes", () => {
 
   it("queues historical peer bootstrap", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ operation_id: "bootstrap-1", status: "pending" }), { status: 202 })
+      new Response(JSON.stringify({ operation_id: "bootstrap-1", status: "pending" }), {
+        status: 202,
+      })
     );
 
     const response = await POST_BOOTSTRAP(

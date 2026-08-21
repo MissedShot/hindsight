@@ -2,7 +2,8 @@ import { proxyPeerRequest, invalidPeerJsonResponse } from "@/lib/peer-proxy";
 
 export async function GET(request: Request, { params }: { params: Promise<{ bankId: string }> }) {
   const { bankId } = await params;
-  return proxyPeerRequest(request, bankId, "/peers", {
+  const query = new URL(request.url).searchParams.toString();
+  return proxyPeerRequest(request, bankId, `/peers${query ? `?${query}` : ""}`, {
     errorKey: "api.errors.peers.list",
     fallbackMessage: "Failed to list peers",
   });

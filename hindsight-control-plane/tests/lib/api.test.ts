@@ -147,9 +147,12 @@ describe("ControlPlaneClient direct fetch error formatting", () => {
 
   it("preserves the transfer API's validation detail for the import view", async () => {
     fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ detail: "Invalid transfer archive: manifest.json is missing" }), {
-        status: 400,
-      })
+      new Response(
+        JSON.stringify({ detail: "Invalid transfer archive: manifest.json is missing" }),
+        {
+          status: 400,
+        }
+      )
     );
 
     const file = new File(["not a transfer archive"], "documents.zip", { type: "application/zip" });
@@ -162,9 +165,12 @@ describe("ControlPlaneClient direct fetch error formatting", () => {
 
   it("prefers an error message over a transfer API detail", async () => {
     fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ error: "Transfer imports are disabled", detail: "Ignored detail" }), {
-        status: 404,
-      })
+      new Response(
+        JSON.stringify({ error: "Transfer imports are disabled", detail: "Ignored detail" }),
+        {
+          status: 404,
+        }
+      )
     );
 
     const file = new File(["transfer archive"], "documents.zip", { type: "application/zip" });
@@ -177,9 +183,12 @@ describe("ControlPlaneClient direct fetch error formatting", () => {
 
   it("formats structured validation details from direct upload requests", async () => {
     fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ detail: { violations: [{ message: "File type is not supported" }] } }), {
-        status: 422,
-      })
+      new Response(
+        JSON.stringify({ detail: { violations: [{ message: "File type is not supported" }] } }),
+        {
+          status: 422,
+        }
+      )
     );
 
     const file = new File(["unsupported"], "document.zip", { type: "application/zip" });
@@ -197,9 +206,12 @@ describe("ControlPlaneClient direct fetch error formatting", () => {
 
   it("formats structured validation details from binary download requests", async () => {
     fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ detail: { violations: [{ message: "Export is disabled" }] } }), {
-        status: 404,
-      })
+      new Response(
+        JSON.stringify({ detail: { violations: [{ message: "Export is disabled" }] } }),
+        {
+          status: 404,
+        }
+      )
     );
 
     await expect(client.exportDocuments("bank-a")).rejects.toMatchObject({
@@ -231,6 +243,19 @@ describe("ControlPlaneClient peer direction routes", () => {
   afterEach(() => {
     fetchSpy.mockRestore();
     delete (globalThis as { window?: unknown }).window;
+  });
+
+  it("forwards peer registry pagination without changing the dataplane contract", async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ items: [], total: 0 }), { status: 200 })
+    );
+
+    await client.listPeers("bank/a", { limit: 100, offset: 200 });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/banks/bank%2Fa/peers?limit=100&offset=200",
+      expect.any(Object)
+    );
   });
 
   it("uses the target query expected by the Control Plane peer proxies", async () => {

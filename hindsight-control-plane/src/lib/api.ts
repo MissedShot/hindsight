@@ -2122,10 +2122,15 @@ export class ControlPlaneClient {
    * implementations so the UI remains compatible while the SDK is generated.
    */
   async listPeers(
-    bankId: string
+    bankId: string,
+    options?: { limit?: number; offset?: number }
   ): Promise<{ items?: Peer[]; peers?: Peer[]; total?: number } | Peer[]> {
+    const params = new URLSearchParams();
+    if (options?.limit != null) params.set("limit", String(options.limit));
+    if (options?.offset != null) params.set("offset", String(options.offset));
+    const query = params.toString();
     return this.fetchApi<{ items?: Peer[]; peers?: Peer[]; total?: number } | Peer[]>(
-      bankApi(bankId, "/peers")
+      bankApi(bankId, `/peers${query ? `?${query}` : ""}`)
     );
   }
 

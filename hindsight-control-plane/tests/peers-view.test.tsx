@@ -10,7 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 
 vi.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
@@ -27,7 +27,11 @@ vi.mock("@/components/feature-not-enabled", () => ({
   FeatureNotEnabled: () => <div data-testid="feature-disabled" />,
 }));
 
-type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void; reject: (reason?: unknown) => void };
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+};
 
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
@@ -46,8 +50,20 @@ async function flush(times = 3): Promise<void> {
   }
 }
 
-const PEER_A = { id: "peer-a", external_id: "peer-a", display_name: "Peer A", kind: "person", metadata: {} };
-const PEER_B = { id: "peer-b", external_id: "peer-b", display_name: "Peer B", kind: "person", metadata: {} };
+const PEER_A = {
+  id: "peer-a",
+  external_id: "peer-a",
+  display_name: "Peer A",
+  kind: "person",
+  metadata: {},
+};
+const PEER_B = {
+  id: "peer-b",
+  external_id: "peer-b",
+  display_name: "Peer B",
+  kind: "person",
+  metadata: {},
+};
 
 let currentBank: string | null = "bank-a";
 let listPeersMock: Mock;
@@ -55,6 +71,7 @@ let getPeerContextMock: Mock;
 let getPeerClaimsMock: Mock;
 let listOperationsMock: Mock;
 let getOperationStatusMock: Mock;
+let modelPeerMock: Mock;
 let planPeerCorrectionMock: Mock;
 let createPeerCorrectionMock: Mock;
 
@@ -66,6 +83,7 @@ vi.mock("@/lib/api", () => ({
     listOperations: (...args: unknown[]) => listOperationsMock(...args),
     getOperationStatus: (...args: unknown[]) => getOperationStatusMock(...args),
     getBankConfig: vi.fn().mockResolvedValue({ config: { peer_model_cooldown_seconds: 0 } }),
+    modelPeer: (...args: unknown[]) => modelPeerMock(...args),
     planPeerCorrection: (...args: unknown[]) => planPeerCorrectionMock(...args),
     createPeerCorrection: (...args: unknown[]) => createPeerCorrectionMock(...args),
   },
@@ -84,6 +102,7 @@ beforeEach(() => {
   getPeerClaimsMock = vi.fn();
   listOperationsMock = vi.fn();
   getOperationStatusMock = vi.fn();
+  modelPeerMock = vi.fn();
   planPeerCorrectionMock = vi.fn();
   createPeerCorrectionMock = vi.fn();
 });
@@ -94,9 +113,16 @@ afterEach(() => {
 });
 
 describe("PeersView scope guards", () => {
+  async function chooseTarget(peer: typeof PEER_A): Promise<void> {
+    const name = new RegExp(`${peer.display_name}${peer.external_id}`);
+    await actFlush(async () => {
+      fireEvent.click(screen.getByRole("button", { name }));
+    });
+  }
+
   it("does not commit stale peers after a bank switch (bank race)", async () => {
-    const bankA = deferred<{ items: typeof PEER_A[] }>();
-    const bankB = deferred<{ items: typeof PEER_B[] }>();
+    const bankA = deferred<{ items: (typeof PEER_A)[] }>();
+    const bankB = deferred<{ items: (typeof PEER_B)[] }>();
     listPeersMock.mockReturnValueOnce(bankA.promise).mockReturnValueOnce(bankB.promise);
     getPeerContextMock.mockResolvedValue({});
     getPeerClaimsMock.mockResolvedValue({ items: [] });
@@ -147,7 +173,7 @@ describe("PeersView scope guards", () => {
   });
 
   it("does not write state after unmount", async () => {
-    const peers = deferred<{ items: typeof PEER_A[] }>();
+    const peers = deferred<{ items: (typeof PEER_A)[] }>();
     listPeersMock.mockReturnValueOnce(peers.promise);
 
     const view = render(<PeersView enabled />);
@@ -164,15 +190,24 @@ describe("PeersView scope guards", () => {
     getPeerContextMock.mockResolvedValue({});
     getPeerClaimsMock.mockResolvedValue({ items: [] });
     listOperationsMock.mockResolvedValue({ operations: [] });
-    const plan = deferred<{ claims: Array<{ claim_type: string; text: string }>; supersede_claim_ids: string[]; reason: string }>();
+    const plan = deferred<{
+      claims: Array<{ claim_type: string; text: string }>;
+      supersede_claim_ids: string[];
+      reason: string;
+    }>();
     planPeerCorrectionMock.mockReturnValueOnce(plan.promise);
 
     render(<PeersView enabled />);
     await flush();
 
+    expect(screen.queryByRole("button", { name: "addCorrection" })).toBeNull();
+    await chooseTarget(PEER_A);
+
     // Open the correction dialog and request a plan for bank-a.
     fireEvent.click(screen.getByRole("button", { name: "addCorrection" }));
-    fireEvent.change(screen.getByLabelText("correctionTextLabel"), { target: { value: "A correction" } });
+    fireEvent.change(screen.getByLabelText("correctionTextLabel"), {
+      target: { value: "A correction" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "reviewCorrection" }));
     plan.resolve({
       claims: [{ claim_type: "ATTRIBUTE", text: "plan-a" }],
@@ -189,6 +224,117 @@ describe("PeersView scope guards", () => {
     await flush(6);
     // The stale plan must not be submittable: no create call may fire.
     expect(createPeerCorrectionMock).not.toHaveBeenCalled();
+  });
+
+  it("never commits a late response from the previously selected pair", async () => {
+    listPeersMock.mockResolvedValue({ items: [PEER_A, PEER_B] });
+    listOperationsMock.mockResolvedValue({ operations: [] });
+    const pairA = deferred<Record<string, unknown>>();
+    const pairB = deferred<Record<string, unknown>>();
+    getPeerContextMock.mockReturnValueOnce(pairA.promise).mockReturnValueOnce(pairB.promise);
+    getPeerClaimsMock.mockResolvedValue({ items: [] });
+
+    render(<PeersView enabled />);
+    await flush();
+    await chooseTarget(PEER_A);
+    await chooseTarget(PEER_B);
+
+    pairB.resolve({
+      observer_peer_id: PEER_A.id,
+      target_peer_id: PEER_B.id,
+      representation: "current pair B",
+      card: { entries: [] },
+    });
+    await pairB.promise;
+    await flush(4);
+    expect(screen.getByText("current pair B")).toBeTruthy();
+
+    pairA.resolve({
+      observer_peer_id: PEER_A.id,
+      target_peer_id: PEER_A.id,
+      representation: "stale pair A",
+      card: { entries: [] },
+    });
+    await pairA.promise;
+    await flush(4);
+    expect(screen.queryByText("stale pair A")).toBeNull();
+    expect(screen.getByText("current pair B")).toBeTruthy();
+  });
+
+  it("tracks manual modeling to a terminal state and reloads the same pair", async () => {
+    listPeersMock.mockResolvedValue({ items: [PEER_A] });
+    listOperationsMock.mockResolvedValue({ operations: [] });
+    getPeerContextMock.mockResolvedValue({
+      observer_peer_id: PEER_A.id,
+      target_peer_id: PEER_A.id,
+      representation: "modeled peer",
+      card: { entries: [] },
+    });
+    getPeerClaimsMock.mockResolvedValue({ items: [] });
+    modelPeerMock.mockResolvedValue({ operation_id: "model-op-1" });
+    getOperationStatusMock.mockResolvedValue({
+      operation_id: "model-op-1",
+      status: "completed",
+      error_message: null,
+    });
+
+    render(<PeersView enabled />);
+    await flush();
+    await chooseTarget(PEER_A);
+    await actFlush(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "model" }));
+    });
+    expect(screen.getByText("model-op-1")).toBeTruthy();
+
+    await actFlush(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1600));
+    });
+    expect(getOperationStatusMock).toHaveBeenCalledWith("bank-a", "model-op-1");
+    expect(screen.getByText("bootstrapStatus.completed")).toBeTruthy();
+    expect(getPeerContextMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("joins compact card entries to claims and never fabricates zero sources", async () => {
+    listPeersMock.mockResolvedValue({ items: [PEER_A] });
+    listOperationsMock.mockResolvedValue({ operations: [] });
+    getPeerContextMock.mockResolvedValue({
+      observer_peer_id: PEER_A.id,
+      target_peer_id: PEER_A.id,
+      representation: "evidence dossier",
+      card: {
+        entries: [
+          { claim_id: "claim-1", claim_type: "IDENTITY", text: "grounded claim" },
+          { claim_id: "claim-2", claim_type: "ATTRIBUTE", text: "compact-only claim" },
+        ],
+      },
+    });
+    getPeerClaimsMock.mockResolvedValue({
+      items: [
+        {
+          id: "claim-1",
+          claim_type: "IDENTITY",
+          text: "grounded claim",
+          status: "active",
+          confidence: 0.9,
+          locked: false,
+          sources: [{ source_id: "source-1", source_kind: "memory_unit" }],
+        },
+      ],
+    });
+
+    render(<PeersView enabled />);
+    await flush();
+    await chooseTarget(PEER_A);
+    expect(screen.getByText("sourceCount")).toBeTruthy();
+    expect(screen.getByText("notAvailable")).toBeTruthy();
+    expect(screen.queryByText("0 sources")).toBeNull();
+
+    fireEvent.click(screen.getByText("sourceCount"));
+    fireEvent.click(screen.getByRole("button", { name: "deleteMemory" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("deleteMemoryConfirm")).toBeTruthy();
+    expect(within(dialog).getByText("source-1")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "deleteMemory" })).toBeTruthy();
   });
 });
 
